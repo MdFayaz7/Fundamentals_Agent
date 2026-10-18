@@ -1,0 +1,105 @@
+# Results Flash Agent configuration. Secrets go in .env, not here.
+
+# Include SME-board filings.
+include_sme = false
+# Alert on filings already published when the agent starts.
+backfill_on_start = false
+# Optional webhook that receives a copy of each alert (uncomment to enable).
+# webhook_url = "https://example.com/hook"
+
+[poll]
+# Seconds between polls during the fast window (IST).
+fast_seconds = 10
+# Fast window start/end, IST, HH:MM.
+fast_start = "08:00"
+fast_end = "23:59"
+# Seconds between polls outside the fast window.
+slow_seconds = 60
+
+[filter]
+# When false, every result is alerted.
+enabled = false
+# Minimum market cap in crore INR (used when enabled).
+min_mcap_cr = 500
+# Symbols always alerted regardless of market cap.
+watchlist = []
+# Pass filings whose market cap is unknown.
+unknown_mcap_pass = true
+
+[paths]
+# SQLite database path.
+db = "data/agent.db"
+
+# Scoring weights; empty means defaults from analyse.py are used.
+[scoring]
+
+[llm]
+# Fraction of each model's daily quota reserved for commentary calls.
+commentary_reserve = 0.3
+
+# Models are tried in order. A model whose provider key is missing in .env is dropped.
+[[llm.models]]
+name = "groq-gpt-oss-120b"
+provider = "groq"
+model = "openai/gpt-oss-120b"
+vision = false
+rpm = 30
+rpd = 1000
+
+[[llm.models]]
+name = "groq-llama-70b"
+provider = "groq"
+model = "llama-3.3-70b-versatile"
+vision = false
+rpm = 30
+rpd = 1000
+
+[[llm.models]]
+name = "groq-gpt-oss-20b"
+provider = "groq"
+model = "openai/gpt-oss-20b"
+vision = false
+rpm = 30
+rpd = 1000
+
+[[llm.models]]
+name = "groq-llama-8b"
+provider = "groq"
+model = "llama-3.1-8b-instant"
+vision = false
+rpm = 30
+rpd = 1000
+
+# OpenRouter free vision models: rpd is 50 per day (1000 after a $10 credit top-up).
+[[llm.models]]
+name = "or-gemma-31b"
+provider = "openrouter"
+model = "google/gemma-4-31b-it:free"
+vision = true
+rpm = 20
+rpd = 50
+
+[[llm.models]]
+name = "or-nemotron-vl"
+provider = "openrouter"
+model = "nvidia/nemotron-3.5-super-vl:free"
+vision = true
+rpm = 20
+rpd = 50
+
+[[llm.models]]
+name = "or-gemma-26b"
+provider = "openrouter"
+model = "google/gemma-4-26b-a4b-it:free"
+vision = true
+rpm = 20
+rpd = 50
+
+# Optional Gemini (needs GEMINI_API_KEY):
+# [[llm.models]]
+# name = "gemini-flash"
+# provider = "gemini"
+# model = "gemini-2.5-flash"
+# vision = true
+# rpm = 10
+# rpd = 250
