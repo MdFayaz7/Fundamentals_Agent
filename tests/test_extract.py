@@ -132,3 +132,83 @@ def test_no_template():
 def test_detect_statement():
     assert detect_statement("STATEMENT OF CONSOLIDATED RESULTS") == "consolidated"
     assert detect_statement("x" * 900 + " consolidated") == "standalone"
+
+
+def corp(*lines: str) -> str:
+    head = ["Statement of standalone results (Rs in crore)",
+            "Revenue from operations 100.00 90.00 80.00"]
+    return "\n".join(head + list(lines))
+
+
+def test_pat_skips_discontinued_and_continuing_when_total_follows():
+    ex = extract_rows(corp(
+        "Profit for the period from continuing operations 15.00 14.00 13.00",
+        "Profit for the period from discontinued operations 2.00 1.00 0.50",
+        "Profit for the period 17.00 15.00 13.50",
+    ))
+    check(ex, {"pat": [17.00, 15.00, 13.50]})
+
+
+def test_pat_continuing_kept_when_no_later_total():
+    ex = extract_rows(corp(
+        "Profit for the period from continuing operations 15.00 14.00 13.00",
+        "Profit for the period from discontinued operations 2.00 1.00 0.50",
+    ))
+    check(ex, {"pat": [15.00, 14.00, 13.00]})
+
+
+def test_pat_ignores_attributable_to_nci():
+    ex = extract_rows(corp(
+        "Net profit after tax attributable to non-controlling interests 1.00 1.00 1.00",
+        "Profit after tax 10.00 9.00 8.00",
+    ))
+    check(ex, {"pat": [10.00, 9.00, 8.00]})
+
+
+def test_pat_and_associates_with_slash_loss_labels():
+    ex = extract_rows(corp(
+        "Share of Profit/(Loss) of joint ventures 1.00 2.00 3.00",
+        "Net Profit/(Loss) for the period 10.00 9.00 8.00",
+    ))
+    check(ex, {"pat": [10.00, 9.00, 8.00], "associates": [1.00, 2.00, 3.00]})
+    ex = extract_rows(corp("Profit / (Loss) after tax 7.00 6.00 5.00"))
+    check(ex, {"pat": [7.00, 6.00, 5.00]})
+
+
+def test_current_tax_expense_is_not_total_tax():
+    ex = extract_rows(corp(
+        "Tax expense",
+        "(a) Current tax expense 4.00 3.00 2.00",
+        "(b) Deferred tax expense 1.00 1.00 1.00",
+    ))
+    check(ex, {"tax": [5.00, 4.00, 3.00]})
+
+
+def test_tax_fallback_skips_discontinued_relating_and_net_of_tax():
+    ex = extract_rows(corp(
+        "Current tax 3.00 2.00 1.00",
+        "Deferred tax 1.00 1.00 1.00",
+        "Income tax relating to items not reclassified tax expense 0.50 0.40 0.30",
+        "Tax expense of discontinued operations - - -",
+        "Extraordinary items (net of tax expense) - - -",
+    ))
+    check(ex, {"tax": [4.00, 3.00, 2.00]})
+
+
+def test_before_guard_for_associates_and_exceptional():
+    ex = extract_rows(corp(
+        "Profit before share of profit of associates and exceptional items 50.00 40.00 30.00",
+        "Share of profit of associates 1.00 2.00 3.00",
+        "Profit before exceptional items and tax 51.00 42.00 33.00",
+        "Exceptional items 5.00 - 2.00",
+    ))
+    check(ex, {
+        "pbt_before_exceptional": [50.00, 40.00, 30.00],
+        "associates": [1.00, 2.00, 3.00],
+        "exceptional": [5.00, 0.0, 2.00],
+    })
+
+
+def test_bracketed_integer_negatives_survive():
+    ex = extract_rows(corp("Exceptional items (125) - (60) (125) (60)"))
+    check(ex, {"exceptional": [-125, 0, -60]})

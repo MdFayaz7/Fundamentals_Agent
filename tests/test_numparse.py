@@ -140,3 +140,14 @@ def test_unit_lacs_and_rupees():
 def test_fallback_on_quarter_end_is_previous_quarter():
     # a filing dated on a quarter end belongs to the previous quarter
     assert fallback_period_end(date(2026, 9, 30)) == date(2026, 6, 30)
+
+
+def test_chained_formula_refs_removed():
+    assert vals("(1)+(2) 10.00 9.00 8.00") == pytest.approx([10, 9, 8])
+    assert vals("(3)-(6) 10.00 9.00 8.00") == pytest.approx([10, 9, 8])
+    assert vals("(a)+(b)+(c) 10.00 9.00 8.00") == pytest.approx([10, 9, 8])
+    assert vals("(i) + (ii) 10.00 9.00 8.00") == pytest.approx([10, 9, 8])
+
+
+def test_bracketed_negatives_next_to_dash_are_values():
+    assert vals("(125) - (60) (125) (60)") == pytest.approx([-125, 0, -60, -125, -60])

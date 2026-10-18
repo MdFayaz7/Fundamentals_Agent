@@ -15,6 +15,10 @@ UNIT_DIVISORS: dict[str, float] = {
 
 _BRACKET_GROUP = re.compile(r"[\(\{\[][^\(\)\{\}\[\]]*[\)\}\]]")
 _REFER_NOTE = re.compile(r"\(refer note[^)]*\)", re.IGNORECASE)
+# Chained short formula refs: "(1)+(2)", "(3)-(6)", "(a)+(b)", "(i) + (ii)". Members are
+# <=2 digits, a roman numeral or a single letter; bracketed numbers of >=3 digits are values.
+_REF = r"[\(\{\[]\s*(?:\d{1,2}|[ivxlc]+|[a-z])\s*[\)\}\]]"
+_FORMULA_CHAIN = re.compile(rf"{_REF}(?:\s*[+\-]\s*{_REF})+", re.IGNORECASE)
 _STRAY = re.compile("[|•'\"*’‘°]")
 _DASHES = {"-", "–", "—"}
 _BRACKET_CHARS = "(){}[]"
@@ -70,6 +74,7 @@ def _parse_word(word: str) -> tuple[Cell, bool, bool] | None:
 
 def tokenize_numbers(s: str) -> list[Cell]:
     s = _REFER_NOTE.sub(" ", s)
+    s = _FORMULA_CHAIN.sub(" ", s)
     s = _BRACKET_GROUP.sub(_drop_formula, s)
     s = _STRAY.sub("", s)
     parsed: list[tuple[Cell, bool, bool]] = []

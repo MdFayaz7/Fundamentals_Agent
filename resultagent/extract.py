@@ -40,7 +40,8 @@ _PBT_BEFORE_EXC = r"profit.{0,40}before.{0,60}exceptional"
 _EXCEPTIONAL = _not_after_before(r"exceptional\s*[il]tems")
 _PBT = r"profit.{0,40}before\s*tax"
 _TOTAL_TAX = r"total\s*tax\s*expense"
-_TAX = r"^(?!.*(?:discontinued|net of tax|relating)).*?tax\s*expense"
+# Component lines (current / deferred) feed the sum fallback, never the total.
+_TAX = r"^(?!.*(?:discontinued|net of tax|relating|current|deferred)).*?tax\s*expense"
 _EPS = (r"\bbasic\b", r"earnings\s*per\s*(?:equity\s*)?share")
 
 _LABELS: dict[Template, dict[str, list[re.Pattern]]] = {
@@ -53,7 +54,9 @@ _LABELS: dict[Template, dict[str, list[re.Pattern]]] = {
         "depreciation": _rx(r"depreciation"),
         "pbt_before_exceptional": _rx(_PBT_BEFORE_EXC),
         "associates": _rx(
-            _not_after_before(r"share of (?:net )?profit.{0,30}(?:associate|joint venture)")
+            _not_after_before(
+                r"share\s+of\s+(?:net\s+)?profit.{0,30}(?:associate|joint\s+venture)"
+            )
         ),
         "exceptional": _rx(_EXCEPTIONAL),
         "pbt": _rx(_PBT),
@@ -95,16 +98,20 @@ _LABELS: dict[Template, dict[str, list[re.Pattern]]] = {
 }
 
 # CORPORATE pat: consolidated net profit after minority/associates first, then plain PAT.
-_PAT_AFTER_MINORITY = _rx(r"net profit.{0,40}after.{0,40}(?:minority|non.controlling|associates)")
-_PAT_PLAIN = _rx(r"profit (?:after tax|for the period|/ ?\(loss\) for the period)")
-_CONTINUING = re.compile(r"continuing operations", re.IGNORECASE)
+# Lines naming who the profit belongs to (owners / NCI share) are never the PAT total.
+_NOT_SHARE = r"^(?!.*(?:attributable|owners)).*?"
+_PAT_AFTER_MINORITY = _rx(
+    _NOT_SHARE + r"net\s+profit.{0,40}after.{0,40}(?:minority|non.controlling|associates)"
+)
+_PAT_PLAIN = _rx(
+    _NOT_SHARE
+    + r"profit\s*(?:/\s*[\(\{]\s*loss\s*[\)\}]\s*)?(?:after\s+tax|for\s+the\s+period)"
+)
+_CONTINUING = re.compile(r"continuing\s+operations", re.IGNORECASE)
+_DISCONTINUED = re.compile(r"discontinued", re.IGNORECASE)
 
 _TAX_PARTS = _rx(r"current\s*tax", r"deferred\s*tax", r"earlier\s*years?")
 
-# Chained formula references such as "(1)+(2)", "(3)-(6)", "(i)+(ii)", "(5) - (6)".
-_FORMULA_CHAIN = re.compile(
-    r"[\(\{\[]\w{1,4}[\)\}\]](?:\s*[+\-]\s*[\(\{\[]\w{1,4}[\)\}\]])+"
-)
 _UNIT_TOKENS = re.compile(r"\b(?:rs|inr|cr|crores?|lakhs?|mn|millions?)\b\.?", re.IGNORECASE)
 
 
@@ -125,25 +132,21 @@ def detect_statement(page_text: str) -> str:
     return "consolidated" if "consolidated" in page_text[:800].lower() else "standalone"
 
 
-def _cells(text: str) -> list[Cell]:
-    return tokenize_numbers(_FORMULA_CHAIN.sub(" ", text))
-
-
 def _is_number_line(line: str) -> bool:
     if re.search(r"[A-Za-z]", _UNIT_TOKENS.sub(" ", line)):
         return False
-    return len(_cells(line)) >= 3
+    return len(tokenize_numbers(line)) >= 3
 
 
 def _cells_at(lines: list[str], i: int, end: int) -> list[Cell]:
     """Cells after the label match (ending at `end`) on line i, topped up from
     up to the next 3 purely numeric lines when the label line has <3 cells."""
-    cells = _cells(lines[i][end:])
+    cells = tokenize_numbers(lines[i][end:])
     for nxt in lines[i + 1:i + 4]:
         if len(cells) >= 3:
             break
         if _is_number_line(nxt):
-            cells.extend(_cells(nxt))
+            cells.extend(tokenize_numbers(nxt))
     return cells[:3]
 
 
@@ -169,9 +172,16 @@ def _corporate_pat(lines: list[str]) -> list[Cell] | None:
     found = _first(lines, _PAT_AFTER_MINORITY)
     if found:
         return found
-    hits = [(line, cells) for p in _PAT_PLAIN for _, line, cells in _matches(lines, p)]
+    hits = [
+        (line, cells)
+        for p in _PAT_PLAIN
+        for _, line, cells in _matches(lines, p)
+        if not _DISCONTINUED.search(line)
+    ]
     for k, (line, cells) in enumerate(hits):
-        if _CONTINUING.search(line) and any(not _CONTINUING.search(h[0]) for h in hits[k + 1:]):
+        if _CONTINUING.search(line) and any(
+            not _CONTINUING.search(later) for later, _ in hits[k + 1:]
+        ):
             continue
         return cells
     return None
