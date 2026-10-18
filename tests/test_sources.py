@@ -46,7 +46,12 @@ def test_nse_parses_only_results():
     assert len(filings) < len(rows)
     psb = [f for f in filings if f.symbol == "PSB"]
     assert psb and psb[0].isin == "INE608A01012"
-    assert not any(f.symbol == "ROSSARI" for f in filings)  # no "financial results" text
+    ros = [f for f in filings if f.symbol == "ROSSARI"]
+    assert ros and ros[0].isin == "INE02A801020"
+    ids = {f.filing_id for f in filings}
+    for r in rows:
+        if r["desc"] in ("Press Release", "Change in Director(s)"):
+            assert r["seq_id"] not in ids
 
 
 def _bse(tmp_path, rows_extra=()):

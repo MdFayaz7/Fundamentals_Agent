@@ -32,11 +32,12 @@ _BSE_MAX_PAGES = 5
 
 
 def is_result_announcement(exchange: str, row: dict) -> bool:
+    """BSE: sub-category is Financial Results. NSE: description is one of the
+    result-bearing categories; text is not required (real result rows often say
+    only "Outcome of Board Meeting held on ..."); the pipeline gates on PDF keywords."""
     if exchange == "BSE":
         return row.get("SUBCATNAME") == "Financial Results"
-    return row.get("desc") in _NSE_DESCS and bool(
-        re.search(r"financial\s+results?", row.get("attchmntText") or "", re.I)
-    )
+    return row.get("desc") in _NSE_DESCS
 
 
 class NseSource:
