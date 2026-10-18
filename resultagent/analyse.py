@@ -23,7 +23,7 @@ _SUMMARY = {
 
 
 def growth(cur: float | None, base: float | None) -> float | None:
-    if cur is None or base is None or base <= 0:
+    if cur is None or base is None or base <= 0 or cur < 0:
         return None
     return (cur - base) / base * 100
 
@@ -73,9 +73,10 @@ def analyse(ex: Extraction, weights: dict[str, float] | None = None) -> Analysis
     margin: Metric | None = None
     if t is Template.CORPORATE:
         ebitda = _series(lambda c: (
-            None if v("revenue", c) is None or v("total_expenses", c) is None
-            else v("revenue", c) - (v("total_expenses", c) - (v("finance_cost", c) or 0)
-                                    - (v("depreciation", c) or 0))))
+            None if None in (v("revenue", c), v("total_expenses", c),
+                             v("finance_cost", c), v("depreciation", c))
+            else v("revenue", c) - (v("total_expenses", c) - v("finance_cost", c)
+                                    - v("depreciation", c))))
         mg = _series(lambda c: (
             ebitda[c] / v("revenue", c) * 100
             if ebitda[c] is not None and v("revenue", c) else None))
@@ -110,6 +111,8 @@ def analyse(ex: Extraction, weights: dict[str, float] | None = None) -> Analysis
     score = 5.0
     flags: list[Flag] = []
     core = t is not Template.CORPORATE
+    label = "Core income" if core else "Sales"
+    swing = False
 
     # growth (sales / core income)
     ry = growth_m.yoy
@@ -123,9 +126,9 @@ def analyse(ex: Extraction, weights: dict[str, float] | None = None) -> Analysis
         elif ry < 0:
             score += w["rev_yoy_lt0"]
         if ry > 15:
-            flags.append(Flag(True, f"Sales grew {ry:.0f}% vs last year"))
+            flags.append(Flag(True, f"{label} grew {ry:.0f}% vs last year"))
         elif ry < 0:
-            flags.append(Flag(False, f"Sales fell {abs(ry):.0f}% vs last year"))
+            flags.append(Flag(False, f"{label} fell {abs(ry):.0f}% vs last year"))
     if growth_m.qoq is not None and growth_m.qoq < -10:
         score += w["qoq_rev_drop"]
 
@@ -163,11 +166,17 @@ def analyse(ex: Extraction, weights: dict[str, float] | None = None) -> Analysis
                                               else "pat", c))[2]
     if p0 is not None and p2 is not None:
         if p2 <= 0 < p0:
+            swing = True
             score += w["turnaround"]
             flags.append(Flag(True, "Turned from loss to profit vs last year"))
         elif p2 > 0 >= p0:
+            swing = True
             score += w["to_loss"]
             flags.append(Flag(False, "Slipped into a loss vs last year"))
+
+    if ry is None and py is None and not swing:
+        flags.append(Flag(False, "Not enough past data to compare — "
+                                 "treat this score with caution"))
 
     pbt, oi, exc, tax = v("pbt", 0), v("other_income", 0), v("exceptional", 0), v("tax", 0)
 
@@ -189,12 +198,13 @@ def analyse(ex: Extraction, weights: dict[str, float] | None = None) -> Analysis
                                      "operating profit"))
 
     if t is Template.BANK:
-        gn = metrics[5]
+        gn = next(m for m in metrics if m.name == "GNPA")
         if gn.qoq is not None and gn.value is not None:
-            if gn.qoq <= -0.05:
+            chg = round(gn.qoq, 2)
+            if chg <= -0.05:
                 score += w["gnpa_down"]
                 flags.append(Flag(True, f"Bad loans (GNPA) improved to {gn.value:.2f}%"))
-            elif gn.qoq >= 0.05:
+            elif chg >= 0.05:
                 score += w["gnpa_up"]
                 flags.append(Flag(False, f"Bad loans (GNPA) worsened to {gn.value:.2f}%"))
 

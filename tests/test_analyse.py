@@ -30,6 +30,7 @@ def test_growth_negative_base_is_none():
     assert growth(10, -5) is None
     assert growth(10, 0) is None
     assert growth(12, 10) == approx(20.0)
+    assert growth(-4, 6) is None
 
 
 def test_rossari():
@@ -72,6 +73,44 @@ def test_to_loss():
     a = analyse(_corp([-4, 5, 6]))
     assert any(f.text == "Slipped into a loss vs last year" for f in a.flags)
     assert a.verdict in ("WEAK", "POOR")
+    assert _m(a, "PAT").yoy is None
+    assert not any(f.text.startswith("Profit fell") for f in a.flags)
+
+
+def test_missing_depreciation_no_margin_signal():
+    ex = _corp([10, 10, 10])
+    ex.rows["depreciation"] = [Cell(10.0), Cell(10.0), Cell(None)]
+    a = analyse(ex)
+    assert _m(a, "EBITDA").yoy is None
+    assert _m(a, "EBITDA margin").yoy is None
+    assert not any(f.text.startswith("Operating margin") for f in a.flags)
+    assert a.score == 5
+
+
+def test_thin_data_flag():
+    ex = Extraction(Template.CORPORATE, "standalone", None,
+                    {"revenue": [Cell(100.0)], "pat": [Cell(10.0)]}, "rules", "crore")
+    a = analyse(ex)
+    assert any(f.text.startswith("Not enough past data") for f in a.flags)
+
+
+def test_lender():
+    ex = extract_rows(open("tests/fixtures/pages/bajajhfl_std.txt").read())
+    a = analyse(ex)
+    assert _m(a, "NII").value == approx(1055.09, abs=0.01)
+
+
+def test_provisions_outpace():
+    rows = {
+        "interest_earned": [200.0, 200.0, 200.0], "interest_expended": [100.0, 100.0, 100.0],
+        "ppop": [50.0, 50.0, 50.0], "provisions": [90.0, 50.0, 50.0],
+        "pat": [10.0, 10.0, 10.0],
+    }
+    ex = Extraction(Template.BANK, "standalone", None,
+                    {k: [Cell(x) for x in vs] for k, vs in rows.items()}, "rules", "crore")
+    a = analyse(ex)
+    assert any(f.text.startswith("Bad-loan provisions are growing faster") for f in a.flags)
+    assert a.score == analyse(ex, {"provisions_outpace": 0}).score - 1
 
 
 def test_weights_override():
