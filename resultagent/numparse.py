@@ -13,8 +13,6 @@ UNIT_DIVISORS: dict[str, float] = {
     "rupees": 1e7,
 }
 
-_OPEN = "({["
-_CLOSE = ")}]"
 _BRACKET_GROUP = re.compile(r"[\(\{\[][^\(\)\{\}\[\]]*[\)\}\]]")
 _REFER_NOTE = re.compile(r"\(refer note[^)]*\)", re.IGNORECASE)
 _STRAY = re.compile("[|•'\"*’‘°]")
