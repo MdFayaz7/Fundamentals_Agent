@@ -95,7 +95,7 @@ class BseSource:
 
     async def fetch(self, day: date) -> list[Filing]:
         d = day.strftime("%Y%m%d")
-        headers = {"Referer": "https://www.bseindia.com", "Origin": "https://www.bseindia.com"}
+        headers = {"Referer": "https://www.bseindia.com/", "Origin": "https://www.bseindia.com"}
         out: list[Filing] = []
         seen_rows = 0
         for page in range(1, _BSE_MAX_PAGES + 1):
@@ -141,7 +141,7 @@ class ScripMaster:
     async def refresh(self) -> int:
         data = await self._http.get_json(
             _BSE_SCRIPS,
-            headers={"Referer": "https://www.bseindia.com", "Origin": "https://www.bseindia.com"},
+            headers={"Referer": "https://www.bseindia.com/", "Origin": "https://www.bseindia.com"},
             timeout=60,
         )
         rows = []
