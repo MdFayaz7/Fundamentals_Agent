@@ -91,24 +91,32 @@ def tokenize_numbers(s: str) -> list[Cell]:
     return out
 
 
-_UNIT_PATTERNS = [
-    ("million", re.compile(r"millions?", re.I)),
-    ("lakh", re.compile(r"lakhs?|lacs?", re.I)),
-    ("crore", re.compile(r"crores?", re.I)),
-    ("thousand", re.compile(r"thousands?", re.I)),
-    ("rupees", re.compile(r"\bin\s+rupees\b", re.I)),
+_UNIT_WORDS = [
+    ("million", r"millions?"),
+    ("lakh", r"lakhs?|lacs?"),
+    ("crore", r"crores?"),
+    ("thousand", r"thousands?"),
+    ("rupees", r"rupees"),
 ]
+# Header form: "in crore", "(Rs. in lakhs)", "Amounts in Rs. Millions", OCR "(f incrore)".
+_UNIT_HEADER = [
+    (n, re.compile(rf"\bin\s*(?:(?:rs|\u20b9|\?|f)\.?\s*)?(?:{w})\b", re.I)) for n, w in _UNIT_WORDS
+]
+_UNIT_BARE = [(n, re.compile(rf"\b(?:{w})\b", re.I)) for n, w in _UNIT_WORDS if n != "rupees"]
+
+
+def _earliest(patterns, text: str) -> str | None:
+    best: tuple[int, str] | None = None
+    for name, pat in patterns:
+        m = pat.search(text)
+        if m and (best is None or m.start() < best[0]):
+            best = (m.start(), name)
+    return best[1] if best else None
 
 
 def detect_unit_divisor(page_text: str) -> tuple[str, float]:
-    best: tuple[int, str] | None = None
-    for name, pat in _UNIT_PATTERNS:
-        m = pat.search(page_text)
-        if m and (best is None or m.start() < best[0]):
-            best = (m.start(), name)
-    if best is None:
-        return "crore", UNIT_DIVISORS["crore"]
-    return best[1], UNIT_DIVISORS[best[1]]
+    name = _earliest(_UNIT_HEADER, page_text) or _earliest(_UNIT_BARE, page_text) or "crore"
+    return name, UNIT_DIVISORS[name]
 
 
 _MONTHS = {
