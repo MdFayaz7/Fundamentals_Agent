@@ -27,6 +27,8 @@ MAX_BACKOFF = 300
 
 def poll_interval(now_ist: datetime, cfg) -> float:
     hm = now_ist.strftime("%H:%M")
+    if cfg.peak_start <= hm <= cfg.peak_end:
+        return cfg.peak_seconds
     return cfg.fast_seconds if cfg.fast_start <= hm <= cfg.fast_end else cfg.slow_seconds
 
 

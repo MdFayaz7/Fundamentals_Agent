@@ -13,6 +13,10 @@ fast_seconds = 10
 # Fast window start/end, IST, HH:MM.
 fast_start = "08:00"
 fast_end = "23:59"
+# Results hours (IST): poll every peak_seconds.
+peak_seconds = 5
+peak_start = "12:00"
+peak_end = "21:00"
 # Seconds between polls outside the fast window.
 slow_seconds = 60
 

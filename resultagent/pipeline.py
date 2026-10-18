@@ -12,7 +12,7 @@ from . import ocr, pdftext
 from .analyse import analyse
 from .config import Settings
 from .extract import detect_template, extract_rows
-from .fmt import append_ai_view, format_flash, format_headline
+from .fmt import append_ai_view, format_flash, format_headline, format_instant
 from .http import Http, HttpError, TooLarge
 from .llm import NOT_FOUND, LlmRouter, llm_commentary, llm_extract_vision
 from .models import Confidence, Extraction, Filing, Template
@@ -39,6 +39,7 @@ class Pipeline:
         self._locks: dict[str, asyncio.Lock] = {}
         self._dl = asyncio.Semaphore(3)
         self.pending_commentary: set[asyncio.Task] = set()
+        self._instant: dict[str, int] = {}  # filing_id -> message id of the "results out" ping
         self.use_ocr = ocr.available()
         if not self.use_ocr:
             log.warning("tesseract not installed — scanned PDFs will get headline alerts only")
@@ -52,9 +53,24 @@ class Pipeline:
         except Exception:
             log.exception("pipeline error for %s %s", f.exchange, f.symbol)
             state = "error"
+        if f.filing_id in self._instant:  # ping sent but no numbers: turn it into a headline
+            reason = {"error": "Couldn't download the PDF — open the link",
+                      "no_table": "No results table found — open the PDF"}.get(state, "Open the PDF")
+            await self._deliver(f, format_headline(f, reason, self.now()))
         self.store.mark(f.exchange, f.filing_id, f.key, state)
-        log.info("%s %s %s", f.exchange, f.symbol or f.key, state)
+        latency = (self.now() - f.disseminated_at).total_seconds()
+        log.info("%s %s %s %.0fs after filing", f.exchange, f.symbol or f.key, state, latency)
         return state
+
+    def _is_result(self, f: Filing) -> bool:
+        return f.exchange == "BSE" or bool(_RESULT_WORDS.search(f.subject))
+
+    async def _deliver(self, f: Filing, html: str) -> int | None:
+        """Edit the instant ping in place when there is one, else send a new message."""
+        mid = self._instant.pop(f.filing_id, None)
+        if mid and await self.tg.edit(mid, html):
+            return mid
+        return await self.tg.send(html)
 
     def _filtered_out(self, f: Filing) -> bool:
         flt = self.s.filter
@@ -75,6 +91,13 @@ class Pipeline:
         async with self._locks.setdefault(f.key, asyncio.Lock()):
             if self.store.alert_today_other_exchange(f.key, f.exchange, self.now().date()):
                 return "skipped"
+            period = fallback_period_end(f.disseminated_at.date())
+            if self._is_result(f) and not self.store.alert_statements(f.key, period):
+                mid = await self.tg.send(format_instant(f, self.now()))
+                if mid:
+                    self._instant[f.filing_id] = mid
+                    self.store.save_alert(f.key, period, "headline", f.exchange, f.filing_id, mid,
+                                          self.now().date())
             info = await self._fetch_pdf(f)
             if info is None:
                 return "error"
@@ -138,9 +161,9 @@ class Pipeline:
                 reason = ("Numbers could not be read reliably — open the PDF" if picked
                           else "Scanned PDF — open the PDF")
                 period = fallback_period_end(f.disseminated_at.date())
-                if self.store.alert_statements(f.key, period):
+                if f.filing_id not in self._instant and self.store.alert_statements(f.key, period):
                     return "skipped"  # already alerted (headline or numbers) for this result
-                msg_id = await self.tg.send(format_headline(f, reason, self.now()))
+                msg_id = await self._deliver(f, format_headline(f, reason, self.now()))
                 self.store.save_alert(f.key, period, "headline", f.exchange, f.filing_id, msg_id,
                                       self.now().date())
                 self._event(f, None, None, conf)
@@ -177,7 +200,7 @@ class Pipeline:
             return "skipped"
         a = analyse(ex, self.s.scoring or None)
         html = format_flash(f, ex, a, conf, self.now())
-        msg_id = await self.tg.send(html)
+        msg_id = await self._deliver(f, html)
         self.store.save_alert(f.key, period, ex.statement, f.exchange, f.filing_id, msg_id, self.now().date())
         self._event(f, ex, a, conf)
         if msg_id and self.router:

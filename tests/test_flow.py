@@ -46,8 +46,9 @@ class FakeTg:
         self.sent.append(html)
         return len(self.sent) if self.ok else None
 
-    async def edit(self, mid, html):
+    async def edit(self, mid, html):  # sent[] keeps each message's final text
         self.edits.append(html)
+        self.sent[mid - 1] = html
         return True
 
 
@@ -94,7 +95,7 @@ async def test_text_typo_goes_vision(settings, tmp_path):
     await asyncio.gather(*p.pending_commentary)
     ev = json.loads(store._db.execute("select json from events").fetchone()[0])
     assert ev["confidence"] == "LLM_VERIFIED" and ev["rows"]["pat"][0] == 19509.96
-    assert tg.edits and "Profit up steadily" in tg.edits[0]
+    assert any("Profit up steadily" in e for e in tg.edits)
 
 
 async def test_no_llm_headline(settings, tmp_path):
@@ -131,9 +132,10 @@ async def test_broken_pdf_and_too_big(settings, tmp_path):
     p, _, tg = make(settings, tmp_path, b"xx")
     p.pdf_retry_waits = (0, 0, 0)
     assert await p.process(filing()) == "error"
+    assert len(tg.sent) == 1 and "download the PDF" in tg.sent[0]  # ping became a headline
     p.http.pdf = HttpError(404, "nf")
     assert await p.process(filing(fid="2")) == "error"
-    assert tg.sent == []
+    assert len(tg.sent) == 1  # same result again: no second message
 
 
 async def test_non_result_scan_spends_no_llm(settings, tmp_path):
@@ -162,7 +164,7 @@ async def test_filter_min_mcap(settings, tmp_path):
 
 
 def test_poll_interval(settings):
-    assert poll_interval(NOW.replace(hour=10), settings.poll) == 10
+    assert poll_interval(NOW.replace(hour=10), settings.poll) == 10  # before peak window
     assert poll_interval(NOW.replace(hour=2), settings.poll) == 60
 
 
@@ -236,3 +238,15 @@ def test_vision_columns_reordered_by_date_and_strings_parsed():
                          "rows": {"pat": ["19,509.96", "18641.28", "(5.0)"], "gnpa_pct": ["1.1%", 1, 1]}})
     assert [c.value for c in ex.rows["pat"]] == [19509.96, -5.0, 18641.28]
     assert ex.period_end == date(2026, 9, 30) and "gnpa_pct" not in ex.rows
+
+
+async def test_instant_ping_then_edited_with_numbers(settings, tmp_path):
+    p, _, tg = make(settings, tmp_path, (PDF / "rossari_page.pdf").read_bytes())
+    assert await p.process(filing(isin="X9")) == "done"
+    assert tg.edits and "results out" not in tg.sent[0] and "EBITDA" in tg.sent[0]
+    assert len(tg.sent) == 1  # one message: the ping, edited in place
+
+
+def test_peak_polling(settings):
+    assert poll_interval(NOW.replace(hour=15), settings.poll) == 5
+    assert poll_interval(NOW.replace(hour=22), settings.poll) == 10

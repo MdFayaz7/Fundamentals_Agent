@@ -29,6 +29,9 @@ class PollCfg:
     slow_seconds: int = 60
     fast_start: str = "08:00"
     fast_end: str = "23:59"
+    peak_seconds: int = 5
+    peak_start: str = "12:00"
+    peak_end: str = "21:00"
 
 
 @dataclass(slots=True)

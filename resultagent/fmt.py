@@ -125,6 +125,15 @@ def format_flash(f: Filing, ex: Extraction, a: Analysis, conf: Confidence,
     return out
 
 
+def format_instant(f: Filing, alerted_at: datetime) -> str:
+    """First message, sent the moment a result filing appears (edited later with the numbers)."""
+    return "\n".join([
+        f"⚡ <b>{escape(f.symbol or f.name)}</b> · {escape(f.name)} — results out",
+        "Reading the numbers…",
+        _footer(f, alerted_at),
+    ])
+
+
 def format_headline(f: Filing, reason: str, alerted_at: datetime) -> str:
     return "\n".join([
         f"⚪ <b>{escape(f.symbol)}</b> · {escape(f.name)} — results filed",
