@@ -143,7 +143,13 @@ class Store:
         return self._scrip("code", code)
 
     def scrip_by_isin(self, isin: str) -> dict | None:
-        return self._scrip("isin", isin)
+        r = self._scrip("isin", isin)
+        if r is None and len(isin) >= 9:  # same issuer + equity, different ISIN serial
+            row = self._db.execute(
+                f"SELECT {', '.join(_SCRIP_COLS)} FROM scrips WHERE isin LIKE ? LIMIT 1", (isin[:9] + "%",)
+            ).fetchone()
+            r = dict(zip(_SCRIP_COLS, row)) if row else None
+        return r
 
     def stats_for_day(self, ist_date: date) -> dict:
         d = ist_date.isoformat()

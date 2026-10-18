@@ -210,3 +210,17 @@ async def test_telegram_retry_after():
     tg = Telegram(http, "t", "1", sleep=sleep)
     assert await tg.send("hi") == 7
     assert 3 in slept
+
+
+async def test_headline_not_repeated_across_exchanges(settings, tmp_path):
+    p, _, tg = make(settings, tmp_path, (PDF / "hdfc_page.pdf").read_bytes(), None)
+    assert await p.process(filing("NSE", "n1")) == "unverified"
+    assert await p.process(filing("NSE", "n2")) == "skipped"
+    assert await p.process(filing("BSE", "b1")) == "skipped"
+    assert len(tg.sent) == 1
+
+
+def test_key_uses_isin_issuer_prefix():
+    a = Filing("NSE", "1", "INE528G01019", "YESBANK", "", "", NOW, "")
+    b = Filing("BSE", "2", "INE528G01035", "YESBANK", "", "", NOW, "", "532648")
+    assert a.key == b.key == "INE528G01"

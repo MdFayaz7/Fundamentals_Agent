@@ -11,7 +11,7 @@ from zoneinfo import ZoneInfo
 from . import pdftext
 from .analyse import analyse
 from .config import Settings
-from .extract import extract_rows
+from .extract import detect_template, extract_rows
 from .fmt import append_ai_view, format_flash, format_headline
 from .http import Http, HttpError, TooLarge
 from .llm import NOT_FOUND, LlmRouter, llm_commentary, llm_extract_vision
@@ -92,9 +92,13 @@ class Pipeline:
             if ex and validate(ex).ok:
                 conf = Confidence.VERIFIED
         if conf is None:
-            pages = [picked[0]] if picked else pdftext.vision_candidates(info)
             looks_like_result = picked or _RESULT_WORDS.search(f.subject) or \
                 any(_RESULT_WORDS.search(t) for t in info.pages[:3])
+            first = range(min(8, len(info.pages)))
+            pages = ([picked[0]] if picked else pdftext.vision_candidates(info)
+                     or [i for i in first if detect_template(info.pages[i])][:2]
+                     # scanned table with a little stray OCR text: least-text pages
+                     or sorted(first, key=lambda i: len(info.pages[i].strip()))[:2])
             if not pages or not looks_like_result:
                 return "no_table"
             ex = None
@@ -109,7 +113,12 @@ class Pipeline:
                 conf = Confidence.UNVERIFIED if picked else Confidence.NO_TEXT
                 reason = ("Numbers could not be read reliably — open the PDF" if picked
                           else "Scanned PDF — open the PDF")
-                await self.tg.send(format_headline(f, reason, self.now()))
+                period = fallback_period_end(f.disseminated_at.date())
+                if self.store.alert_statements(f.key, period):
+                    return "skipped"  # already alerted (headline or numbers) for this result
+                msg_id = await self.tg.send(format_headline(f, reason, self.now()))
+                self.store.save_alert(f.key, period, "headline", f.exchange, f.filing_id, msg_id,
+                                      self.now().date())
                 self._event(f, None, None, conf)
                 return "unverified"
         return await self._alert(f, ex, conf)
@@ -118,6 +127,7 @@ class Pipeline:
         period = ex.period_end or fallback_period_end(f.disseminated_at.date())
         ex.period_end = period
         existing = self.store.alert_statements(f.key, period)
+        existing.discard("headline")  # numbers after an earlier headline-only alert are still sent
         if ex.statement in existing or "consolidated" in existing or \
                 (existing and ex.template == Template.BANK):
             return "skipped"

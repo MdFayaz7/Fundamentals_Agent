@@ -32,7 +32,9 @@ class Filing:
 
     @property
     def key(self) -> str:
-        return self.isin or f"BSE:{self.scrip_code}"
+        # ISIN chars 0-8 = country + issuer + security type. NSE sometimes reports an older ISIN
+        # than BSE for the same share (e.g. INE528G01019 vs INE528G01035), so dedupe on the prefix.
+        return self.isin[:9] if self.isin else f"BSE:{self.scrip_code}"
 
 
 @dataclass(slots=True)
