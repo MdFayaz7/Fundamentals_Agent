@@ -71,7 +71,7 @@ def _delta(m: Metric, v: float | None) -> str:
 
 
 def _metric_line(m: Metric) -> str:
-    return (f"{m.name:<11} {_value(m):>13}  YoY {_delta(m, m.yoy):>7}"
+    return (f"{m.name:<11} {_value(m):>15}  YoY {_delta(m, m.yoy):>7}"
             f"  QoQ {_delta(m, m.qoq):>7}")
 
 
@@ -80,24 +80,30 @@ def _ist(dt: datetime) -> str:
 
 
 def _footer(f: Filing, alerted_at: datetime) -> str:
-    n = round((alerted_at - f.disseminated_at).total_seconds())
+    n = max(0, round((alerted_at - f.disseminated_at).total_seconds()))
     return (f'📄 <a href="{escape(f.pdf_url, quote=True)}">PDF</a> · {escape(f.exchange)} '
             f"{_ist(f.disseminated_at)} · alert {_ist(alerted_at)} ({n} s)")
 
 
-def _render(f, ex, a, conf, alerted_at, flags) -> str:
+def _cut(text: str, limit: int) -> str:
+    return text if len(text) <= limit else text[: limit - 1].rstrip() + "…"
+
+
+def _render(f, ex, a, conf, alerted_at, flags, name=None, summary=None) -> str:
+    name = f.name if name is None else name
+    summary = a.summary if summary is None else summary
     emoji = _EMOJI.get(a.verdict.upper(), "⚪")
     period = fy_label(ex.period_end) if ex.period_end else "Results"
     label = _TEMPLATE_LABEL.get(str(ex.template), str(ex.template))
     badge = "✔ AI-read, verified" if conf == Confidence.LLM_VERIFIED else "✔ verified"
     lines = [
-        f"{emoji} <b>{escape(f.symbol)}</b> · {escape(f.name)} · {period} "
+        f"{emoji} <b>{escape(f.symbol)}</b> · {escape(name)} · {period} "
         f"({ex.statement.capitalize()}) · {label}",
         f"Verdict: <b>{escape(a.verdict)}</b> · Score {a.score}/10 · {badge}",
         "<pre>" + escape("\n".join(_metric_line(m) for m in a.metrics)) + "</pre>",
     ]
     lines += [f"{'✅' if fl.positive else '⚠️'} {escape(fl.text)}" for fl in flags]
-    lines.append(f"<i>What this means:</i> {escape(a.summary)}")
+    lines.append(f"<i>What this means:</i> {escape(summary)}")
     lines.append(_footer(f, alerted_at))
     return "\n".join(lines)
 
@@ -109,6 +115,13 @@ def format_flash(f: Filing, ex: Extraction, a: Analysis, conf: Confidence,
     while len(out) > MAX_LEN and flags:
         flags.pop()
         out = _render(f, ex, a, conf, alerted_at, flags)
+    summary, name = a.summary, f.name
+    while len(out) > MAX_LEN and (len(summary) > 1 or len(name) > 1):
+        if len(summary) > 1:
+            summary = _cut(summary, max(1, len(summary) - max(1, len(out) - MAX_LEN)))
+        else:
+            name = _cut(name, max(1, len(name) - max(1, len(out) - MAX_LEN)))
+        out = _render(f, ex, a, conf, alerted_at, flags, name, summary)
     return out
 
 
@@ -121,4 +134,10 @@ def format_headline(f: Filing, reason: str, alerted_at: datetime) -> str:
 
 
 def append_ai_view(html: str, bullets: list[str]) -> str:
-    return html + "\n\n<b>AI view</b>\n" + "\n".join(f"• {escape(b)}" for b in bullets)
+    items = [f"• {escape(_cut(b, 160))}" for b in bullets[:4]]
+    while items:
+        out = html + "\n\n<b>AI view</b>\n" + "\n".join(items)
+        if len(out) <= 4096:
+            return out
+        items.pop()
+    return html

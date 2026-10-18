@@ -56,3 +56,34 @@ def test_headline():
 def test_append_ai_view():
     out = append_ai_view("base", ["a < b", "c"])
     assert out.startswith("base") and "a &lt; b" in out
+
+
+def test_ai_view_capped():
+    out = append_ai_view("x" * 1490, ["y" * 300] * 10)
+    assert len(out) <= 4096
+    assert out.count("•") <= 4
+
+
+def test_ai_view_escape_not_split():
+    out = append_ai_view("base", ["&<>" * 100])
+    bullet = out.split("• ", 1)[1]
+    assert bullet.endswith("…")
+    body = bullet[:-1]
+    assert body == "&amp;&lt;&gt;" * (len(body) // 13) and len(body) % 13 == 0
+
+
+def test_flash_long_flags_and_text(hdfc_truth):
+    from resultagent.models import Flag
+
+    a = analyse(hdfc_truth)
+    a.flags = [Flag(True, "f" * 200) for _ in range(20)]
+    assert len(format_flash(_filing(), hdfc_truth, a, Confidence.VERIFIED, ALERT)) <= 1500
+    a.summary = "s" * 3000
+    out = format_flash(_filing("N" * 2000), hdfc_truth, a, Confidence.VERIFIED, ALERT)
+    assert len(out) <= 1500 and "…" in out
+
+
+def test_negative_latency(hdfc_truth):
+    a = analyse(hdfc_truth)
+    out = format_flash(_filing(), hdfc_truth, a, Confidence.VERIFIED, DISS.replace(second=0))
+    assert "(0 s)" in out
