@@ -31,7 +31,7 @@ _REFERER = {"NSE": "https://www.nseindia.com/", "BSE": "https://www.bseindia.com
 class Pipeline:
     extract_timeout = 25.0
     commentary_timeout = 20.0
-    pdf_retry_waits = (0, 3, 10)
+    pdf_retry_waits = (0, 5, 20)  # exchanges briefly serve block pages under load
 
     def __init__(self, settings: Settings, store: Store, http: Http, router: LlmRouter | None,
                  telegram: Telegram, now=lambda: datetime.now(IST)):
@@ -114,6 +114,8 @@ class Pipeline:
                 async with self._dl:
                     data = await self.http.get_bytes(f.pdf_url, max_bytes=MAX_PDF, timeout=30,
                                                      headers={"Referer": _REFERER.get(f.exchange, "")})
+                if not data.startswith(b"%PDF"):
+                    raise ValueError(f"not a PDF ({len(data)} bytes): {data[:80]!r}")
                 return pdftext.load_pdf(data)
             except TooLarge as e:
                 log.warning("pdf too large %s: %s", f.pdf_url, e)
