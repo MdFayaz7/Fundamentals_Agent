@@ -43,7 +43,8 @@ def test_escapes_html(hdfc_truth):
     a = analyse(hdfc_truth)
     out = format_flash(_filing("A&B <Ltd>"), hdfc_truth, a, Confidence.LLM_VERIFIED, ALERT)
     assert "A&amp;B &lt;Ltd&gt;" in out
-    assert "AI-read, verified" in out
+    hdfc_truth.source = "xbrl"
+    assert "exchange XBRL" in format_flash(_filing("x"), hdfc_truth, a, Confidence.VERIFIED, ALERT)
 
 
 def test_headline():

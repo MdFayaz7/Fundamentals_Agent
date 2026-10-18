@@ -5,7 +5,7 @@ from html import escape
 from zoneinfo import ZoneInfo
 
 from resultagent.models import Analysis, Confidence, Extraction, Filing, Metric
-from resultagent.numparse import fy_label
+from resultagent.periods import fy_label
 
 IST = ZoneInfo("Asia/Kolkata")
 MINUS = "−"
@@ -81,7 +81,8 @@ def _ist(dt: datetime) -> str:
 
 def _footer(f: Filing, alerted_at: datetime) -> str:
     n = max(0, round((alerted_at - f.disseminated_at).total_seconds()))
-    return (f'📄 <a href="{escape(f.pdf_url, quote=True)}">PDF</a> · {escape(f.exchange)} '
+    label = "Filing" if f.subject == "XBRL" else "PDF"
+    return (f'📄 <a href="{escape(f.pdf_url, quote=True)}">{label}</a> · {escape(f.exchange)} '
             f"{_ist(f.disseminated_at)} · alert {_ist(alerted_at)} ({n} s)")
 
 
@@ -95,7 +96,7 @@ def _render(f, ex, a, conf, alerted_at, flags, name=None, summary=None) -> str:
     emoji = _EMOJI.get(a.verdict.upper(), "⚪")
     period = fy_label(ex.period_end) if ex.period_end else "Results"
     label = _TEMPLATE_LABEL.get(str(ex.template), str(ex.template))
-    badge = "✔ AI-read, verified" if conf == Confidence.LLM_VERIFIED else "✔ verified"
+    badge = "✔ exact (exchange XBRL)" if ex.source == "xbrl" else "✔ verified"
     lines = [
         f"{emoji} <b>{escape(f.symbol)}</b> · {escape(name)} · {period} "
         f"({ex.statement.capitalize()}) · {label}",

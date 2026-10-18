@@ -28,6 +28,9 @@ CREATE TABLE IF NOT EXISTS llm_usage (
 CREATE TABLE IF NOT EXISTS scrips (
     code TEXT PRIMARY KEY, isin TEXT, symbol TEXT, name TEXT, mcap_cr REAL, grp TEXT);
 CREATE INDEX IF NOT EXISTS scrips_isin ON scrips(isin);
+CREATE TABLE IF NOT EXISTS xbrl (
+    symbol TEXT NOT NULL, statement TEXT NOT NULL, period_end TEXT NOT NULL, json TEXT NOT NULL,
+    PRIMARY KEY (symbol, statement, period_end));
 """
 
 
@@ -97,6 +100,23 @@ class Store:
                 (key, period_end.isoformat(), statement, exchange, filing_id, message_id,
                  ist_date.isoformat()),
             )
+
+    def alert_message_id(self, key: str, period_end: date) -> int | None:
+        """Telegram message of the earliest alert for this result (the instant ping)."""
+        r = self._db.execute(
+            "SELECT message_id FROM alerts WHERE key=? AND period_end=? AND message_id IS NOT NULL "
+            "ORDER BY rowid LIMIT 1", (key, period_end.isoformat())).fetchone()
+        return r[0] if r else None
+
+    def xbrl_get(self, symbol: str, statement: str, period_end: date) -> dict | None:
+        r = self._db.execute("SELECT json FROM xbrl WHERE symbol=? AND statement=? AND period_end=?",
+                             (symbol, statement, period_end.isoformat())).fetchone()
+        return json.loads(r[0]) if r else None
+
+    def xbrl_put(self, symbol: str, statement: str, period_end: date, value: dict) -> None:
+        with self._db:
+            self._db.execute("INSERT OR REPLACE INTO xbrl VALUES(?,?,?,?)",
+                             (symbol, statement, period_end.isoformat(), json.dumps(value)))
 
     def add_event(self, payload: dict) -> int:
         with self._db:

@@ -15,6 +15,7 @@ from .config import Settings
 from .http import Http
 from .llm import LlmRouter
 from .pipeline import Pipeline
+from .xbrl import XbrlSource
 from .sources import BseSource, NseSource, ScripMaster
 from .store import Store
 from .telegram import Telegram
@@ -23,6 +24,7 @@ log = logging.getLogger(__name__)
 IST = ZoneInfo("Asia/Kolkata")
 FAIL_ALERT_SECS = 600
 MAX_BACKOFF = 300
+XBRL_POLL_SECS = 30
 
 
 def poll_interval(now_ist: datetime, cfg) -> float:
@@ -40,7 +42,8 @@ class App:
         self.http = http or Http()
         self.tg = telegram or Telegram(self.http, settings.telegram.bot_token, settings.telegram.chat_id)
         self.router = LlmRouter(self.http, self.store, settings.llm) if settings.llm.models else None
-        self.pipeline = Pipeline(settings, self.store, self.http, self.router, self.tg, now)
+        self.xbrl = XbrlSource(self.http, self.store)
+        self.pipeline = Pipeline(settings, self.store, self.xbrl, self.router, self.tg, now)
         self.scrips = ScripMaster(self.http, self.store)
         self.sources = sources or {"NSE": NseSource(self.http),
                                    "BSE": BseSource(self.http, self.store, settings.include_sme)}
@@ -66,6 +69,20 @@ class App:
                         self.store.mark(f.exchange, f.filing_id, f.key, "seen")
             except Exception as e:
                 log.warning("startup fetch %s failed: %s", name, e)
+        try:
+            for x in await self.xbrl.fetch(100):
+                if not self.store.seen("XBRL", x.seq_id):
+                    self.store.mark("XBRL", x.seq_id, x.symbol, "seen")
+        except Exception as e:
+            log.warning("startup fetch XBRL failed: %s", e)
+
+    async def poll_xbrl(self) -> int:
+        n = 0
+        for x in await self.xbrl.fetch(50):
+            if not self.store.seen("XBRL", x.seq_id):
+                self._spawn(self.pipeline.process_xbrl(x))
+                n += 1
+        return n
 
     async def poll_once(self, src) -> int:
         n = 0
@@ -77,14 +94,15 @@ class App:
         return n
 
     async def poll_loop(self, name: str) -> None:
-        src, failing_since, alerted, fails = self.sources[name], None, False, 0
+        src, failing_since, alerted, fails = self.sources.get(name), None, False, 0
         while True:
             try:
-                await self.poll_once(src)
+                await (self.poll_xbrl() if name == "XBRL" else self.poll_once(src))
                 if alerted:
                     await self.tg.send(f"✅ {name} feed recovered")
                 failing_since, alerted, fails = None, False, 0
-                wait = poll_interval(self.now(), self.s.poll) * random.uniform(0.8, 1.2)
+                base = XBRL_POLL_SECS if name == "XBRL" else poll_interval(self.now(), self.s.poll)
+                wait = base * random.uniform(0.8, 1.2)
             except Exception as e:
                 fails += 1
                 failing_since = failing_since or time.monotonic()
@@ -121,7 +139,7 @@ class App:
         if not self.s.backfill_on_start:
             await self.mark_existing_seen()
         tasks = [asyncio.create_task(c) for c in
-                 (self.poll_loop("NSE"), self.poll_loop("BSE"), self.daily_loop())]
+                 (self.poll_loop("NSE"), self.poll_loop("BSE"), self.poll_loop("XBRL"), self.daily_loop())]
         log.info("results agent running")
         await stop.wait()
         for t in tasks + list(self._tasks):
@@ -158,7 +176,12 @@ async def replay(settings: Settings, day: date, send: bool) -> None:
             t0 = time.monotonic()
             state = await app.pipeline.process(f)
             rows.append((f.exchange, f.symbol or f.key, state, round(time.monotonic() - t0, 1)))
-    await asyncio.gather(*app.pipeline.pending_commentary, return_exceptions=True)
+    for x in await app.xbrl.fetch(300):
+        if x.filed_at.date() == day:
+            t0 = time.monotonic()
+            state = await app.pipeline.process_xbrl(x)
+            rows.append(("XBRL", f"{x.symbol} {x.statement[:4]}", state, round(time.monotonic() - t0, 1)))
+    await asyncio.gather(*app.pipeline.pending, return_exceptions=True)
     print(f"\n{'exch':4} {'symbol':14} {'state':10} secs")
     for r in rows:
         print(f"{r[0]:4} {r[1][:14]:14} {r[2]:10} {r[3]}")

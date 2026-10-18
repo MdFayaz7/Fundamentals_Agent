@@ -3,7 +3,6 @@ from datetime import date
 from pytest import approx
 
 from resultagent.analyse import analyse, growth
-from resultagent.extract import extract_rows
 from resultagent.models import Cell, Extraction, Template
 
 
@@ -33,8 +32,18 @@ def test_growth_negative_base_is_none():
     assert growth(-4, 6) is None
 
 
+def make_ex(template, statement, **rows):
+    from resultagent.models import Cell, Extraction, Template
+    return Extraction(Template(template), statement, None,
+                      {k: [Cell(v) for v in vals] for k, vals in rows.items()}, "xbrl", "crore")
+
+
 def test_rossari():
-    ex = extract_rows(open("tests/fixtures/pages/rossari_cons.txt").read())
+    ex = make_ex("corporate", "consolidated", revenue=[697.560, 697.200, 586.107],
+                 other_income=[0.599, 3.187, 1.604], total_income=[698.159, 700.387, 587.711],
+                 total_expenses=[649.359, 653.172, 538.507], finance_cost=[8.677, 10.977, 6.091],
+                 depreciation=[30.096, 25.615, 18.233], pbt=[49.269, 47.672, 49.672],
+                 tax=[10.362, 12.577, 12.796], pat=[38.907, 35.095, 36.876], eps=[7.02, 6.34, 6.66])
     a = analyse(ex)
     rev = _m(a, "Revenue")
     assert rev.yoy == approx(19.02, abs=0.05)
@@ -95,7 +104,9 @@ def test_thin_data_flag():
 
 
 def test_lender():
-    ex = extract_rows(open("tests/fixtures/pages/bajajhfl_std.txt").read())
+    ex = make_ex("lender", "standalone", interest_income=[3051.74, 2856.07, 2614.44],
+                 revenue=[3250.57, 3063.02, 2748.04], finance_cost=[1996.65, 1888.49, 1657.96],
+                 impairment=[34.78, 16.10, 42.85], pat=[756.97, 715.28, 642.96])
     a = analyse(ex)
     assert _m(a, "NII").value == approx(1055.09, abs=0.01)
 

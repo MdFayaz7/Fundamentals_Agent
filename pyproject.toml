@@ -9,8 +9,6 @@ description = "Results Flash Agent: NSE/BSE result filing alerts to Telegram"
 requires-python = ">=3.11"
 dependencies = [
     "curl_cffi>=0.7",
-    "pypdfium2>=4.30",
-    "Pillow>=10",
 ]
 
 [project.optional-dependencies]
