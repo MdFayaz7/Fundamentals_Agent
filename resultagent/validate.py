@@ -56,6 +56,7 @@ _IDENTITIES: dict[Template, list[tuple[str, list[Variant]]]] = {
 }
 
 _DECIMAL_LOSS_KEYS = ("finance_cost", "depreciation")
+_NEVER_REPAIR = {"pat"}
 
 
 def _mandatory(variants: list[Variant], key: str) -> bool:
@@ -136,9 +137,9 @@ def _repair_column(chk: _Checker, col: int, repaired: list[str]) -> None:
         if before[name] is not False:
             continue
         for key in _keys(variants):
-            cells = ex.rows.get(key)
-            if not cells or cells[col].value is None:
+            if key in _NEVER_REPAIR or ex.val(key, col) is None:
                 continue
+            cells = ex.rows[key]
             involved = [
                 n for n, vs in chk.identities
                 if _mandatory(vs, key) and chk.evaluable(vs, col)
@@ -207,11 +208,16 @@ def validate(ex: Extraction) -> Validation:
     names = [name for name, _ in chk.identities]
     first, middle, last = names[0], names[1:-1], names[-1]
     ok = bool(status[0][first] and status[0][last] and any(status[0][m] for m in middle))
-    first_total = chk.identities[0][1][0][-1][0]
+    mandatory = {
+        k for _, vs in chk.identities for k in _keys(vs) if k not in _OPTIONAL
+    }
     for col in (1, 2):
-        present = ex.val("pat", col) is not None or ex.val(first_total, col) is not None
+        present = any(ex.val(k, col) is not None for k in mandatory)
         if present and not (status[col][first] and status[col][last]):
             ok = False
+    # Any evaluated identity still failing after repair rejects the extraction.
+    if failed:
+        ok = False
 
     if ex.val("pat", 0) is None:
         ok = False
