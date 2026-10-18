@@ -76,5 +76,5 @@ cd ~/resultagent && git pull && .venv/bin/pip install -q . && sudo systemctl res
 
 ## For the future algo
 Every alert is also stored as JSON in `data/agent.db` table `events`
-(`confidence`, `score`, `verdict`, all numbers). Only use `VERIFIED` / `LLM_VERIFIED` rows.
+(`source = xbrl`, `score`, `verdict`, all three quarters of numbers).
 Set `webhook_url` in `config.toml` to receive each event as an HTTP POST.
