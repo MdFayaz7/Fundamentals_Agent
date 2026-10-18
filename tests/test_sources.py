@@ -148,3 +148,43 @@ def test_get_bytes_too_large():
     with pytest.raises(TooLarge):
         asyncio.run(http.get_bytes("http://x", max_bytes=250))
     assert len(asyncio.run(http.get_bytes("http://x", max_bytes=5000))) == 1000
+
+
+def test_bse_malformed_body_raises_httperror(tmp_path):
+    import asyncio
+
+    store = Store(tmp_path / "t.db")
+    with pytest.raises(HttpError) as ei:
+        asyncio.run(BseSource(FakeHttp({"AnnSubCategoryGetData": []}), store).fetch(date(2026, 10, 17)))
+    assert ei.value.status == 200
+
+
+def test_nse_malformed_body_raises_and_rewarms():
+    import asyncio
+
+    src = NseSource(FakeHttp({"corporate-announcements": {"error": "x"}, "nseindia.com/": {}}))
+    with pytest.raises(HttpError) as ei:
+        asyncio.run(src.fetch(date(2026, 10, 17)))
+    assert ei.value.status == 200 and src._warmed_at is None
+
+
+def test_nse_bad_row_skipped():
+    import asyncio
+
+    good = next(r for r in load("nse_announcements.json") if r["symbol"] == "PSB" and r["desc"] == "Outcome of Board Meeting")
+    bad = {k: v for k, v in good.items() if k != "seq_id"}
+    src = NseSource(FakeHttp({"corporate-announcements": [bad, good], "nseindia.com/": {}}))
+    assert len(asyncio.run(src.fetch(date(2026, 10, 17)))) == 1
+
+
+def test_bse_repeated_pages_deduped(tmp_path):
+    import asyncio
+
+    store, http = _bse(tmp_path)
+    res = http.routes["AnnSubCategoryGetData"]
+    res["Table1"] = [{"ROWCNT": 9999}]
+    once = asyncio.run(BseSource(FakeHttp({"AnnSubCategoryGetData": load("bse_results.json")}), store).fetch(date(2026, 10, 17)))
+    http2 = FakeHttp({"AnnSubCategoryGetData": res})
+    out = asyncio.run(BseSource(http2, store).fetch(date(2026, 10, 17)))
+    assert len(http2.calls) == 5
+    assert len({f.filing_id for f in out}) == len(out) == len(once)
