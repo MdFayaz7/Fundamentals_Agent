@@ -212,3 +212,12 @@ def test_before_guard_for_associates_and_exceptional():
 def test_bracketed_integer_negatives_survive():
     ex = extract_rows(corp("Exceptional items (125) - (60) (125) (60)"))
     check(ex, {"exceptional": [-125, 0, -60]})
+
+
+def test_ocr_lookalike_letters_still_match():
+    text = ("Interest earned 100.00 90.00 80.00\nOther Income 10.00 9.00 8.00\nTotal Income 110.00 99.00 88.00\n"
+            "Interest expended 50.00 45.00 40.00\n"
+            "7 Operating Profit before provislons and contingencles (3)-(6) 29.00 28.00 27.00\n"
+            "Profit from ordlnary activities before tax 25.00 24.00 23.00")
+    ex = extract_rows(text)
+    assert ex.val("ppop", 0) == 29.0 and ex.val("pbt", 0) == 25.0

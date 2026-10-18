@@ -131,23 +131,24 @@ def test_get_bytes_too_large():
 
     class Resp:
         status_code = 200
-        headers = {}
 
-        async def aiter_content(self):
-            for _ in range(10):
-                yield b"x" * 100
-
-        async def aclose(self):
-            pass
+        def __init__(self, declared):
+            self.content = b"x" * 1000
+            self.headers = {"content-length": declared}
 
     class Sess:
+        def __init__(self, declared="1000"):
+            self.declared = declared
+
         async def request(self, *a, **kw):
-            return Resp()
+            return Resp(self.declared)
 
     http = Http(session=Sess())
     with pytest.raises(TooLarge):
         asyncio.run(http.get_bytes("http://x", max_bytes=250))
     assert len(asyncio.run(http.get_bytes("http://x", max_bytes=5000))) == 1000
+    with pytest.raises(HttpError):  # body shorter than Content-Length = truncated download
+        asyncio.run(Http(session=Sess("7101847")).get_bytes("http://x", max_bytes=10**8))
 
 
 def test_bse_malformed_body_raises_httperror(tmp_path):

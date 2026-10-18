@@ -56,36 +56,19 @@ class Http:
     async def get_bytes(
         self, url: str, *, max_bytes: int, timeout: float = 30, headers: dict | None = None
     ) -> bytes:
-        resp = await self._request("GET", url, headers=headers, timeout=timeout, stream=True)
-        try:
-            if not 200 <= resp.status_code < 300:
-                body = b""
-                async for chunk in resp.aiter_content():
-                    body += chunk
-                    if len(body) >= 200:
-                        break
-                raise HttpError(resp.status_code, _snippet(body))
-            declared = resp.headers.get("content-length")
-            if declared and declared.isdigit() and int(declared) > max_bytes:
-                raise TooLarge(f"content-length {declared} > {max_bytes}")
-            buf = bytearray()
-            try:
-                async for chunk in resp.aiter_content():
-                    buf += chunk
-                    if len(buf) > max_bytes:
-                        raise TooLarge(f"body exceeds {max_bytes} bytes")
-            except TooLarge:
-                raise
-            except HttpError:
-                raise
-            except Exception as exc:
-                raise HttpError(0, str(exc)[:200]) from exc
-            return bytes(buf)
-        finally:
-            try:
-                await resp.aclose()
-            except Exception:
-                pass
+        # Plain (non-streaming) download: curl_cffi's async stream was seen to end early on
+        # multi-MB PDFs. Completeness is checked against Content-Length.
+        resp = await self._request("GET", url, headers=headers, timeout=timeout)
+        if not 200 <= resp.status_code < 300:
+            raise HttpError(resp.status_code, _snippet(resp.content))
+        body = resp.content
+        if len(body) > max_bytes:
+            raise TooLarge(f"body {len(body)} > {max_bytes} bytes")
+        declared = resp.headers.get("content-length")
+        compressed = resp.headers.get("content-encoding") not in (None, "", "identity")
+        if declared and declared.isdigit() and not compressed and len(body) < int(declared):
+            raise HttpError(0, f"truncated: got {len(body)} of {declared} bytes")
+        return body
 
     async def close(self) -> None:
         await self._session.close()

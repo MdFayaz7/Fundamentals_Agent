@@ -8,14 +8,14 @@ from dataclasses import asdict
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
-from . import pdftext
+from . import ocr, pdftext
 from .analyse import analyse
 from .config import Settings
 from .extract import detect_template, extract_rows
 from .fmt import append_ai_view, format_flash, format_headline
 from .http import Http, HttpError, TooLarge
 from .llm import NOT_FOUND, LlmRouter, llm_commentary, llm_extract_vision
-from .models import Confidence, Filing, Template
+from .models import Confidence, Extraction, Filing, Template
 from .numparse import fallback_period_end, fy_label
 from .store import Store
 from .telegram import Telegram
@@ -39,6 +39,9 @@ class Pipeline:
         self._locks: dict[str, asyncio.Lock] = {}
         self._dl = asyncio.Semaphore(3)
         self.pending_commentary: set[asyncio.Task] = set()
+        self.use_ocr = ocr.available()
+        if not self.use_ocr:
+            log.warning("tesseract not installed — scanned PDFs will get headline alerts only")
 
     async def process(self, f: Filing) -> str:
         if self.store.seen(f.exchange, f.filing_id):
@@ -116,7 +119,11 @@ class Pipeline:
             if not pages or not looks_like_result:
                 return "no_table"
             ex = None
-            if self.router:
+            if self.use_ocr:
+                ex = await self._ocr(f, info, picked, first)
+                if ex:
+                    conf = Confidence.VERIFIED
+            if conf is None and self.router:
                 jpegs = [pdftext.render_jpeg(info, i) for i in pages]
                 vx = await llm_extract_vision(self.router, jpegs, self.extract_timeout)
                 if vx is NOT_FOUND:
@@ -139,6 +146,26 @@ class Pipeline:
                 self._event(f, None, None, conf)
                 return "unverified"
         return await self._alert(f, ex, conf)
+
+    async def _ocr(self, f: Filing, info, picked, first) -> Extraction | None:
+        """OCR up to 3 likely result pages; first verified one wins (consolidated preferred
+        for non-banks). Same rules + arithmetic checks as the text path."""
+        cands = [picked[0]] if picked else []
+        cands += [i for i in first if i not in cands and
+                  (detect_template(info.pages[i]) or len(info.pages[i].strip()) < 600)]
+        best = None
+        for i in cands[:3]:
+            text = await ocr.ocr_page(info, i)
+            ex = extract_rows(text) if text else None
+            v = validate(ex) if ex else None
+            log.info("ocr %s page %d: %s", f.symbol or f.key, i,
+                     "no table" if ex is None else ("ok" if v.ok else f"rejected {v.failed}"))
+            if v and v.ok:
+                ex.source = "ocr"
+                if ex.template == Template.BANK or ex.statement == "consolidated":
+                    return ex
+                best = best or ex
+        return best
 
     async def _alert(self, f: Filing, ex, conf: Confidence) -> str:
         period = ex.period_end or fallback_period_end(f.disseminated_at.date())

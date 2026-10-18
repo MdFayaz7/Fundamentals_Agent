@@ -156,3 +156,14 @@ def test_short_rows_do_not_crash():
     ex.rows["total_income"] = [Cell(1000)]
     ex.rows["pbt_before_exceptional"] = [Cell(130), Cell(120)]
     assert validate(ex).ok is False
+
+
+def test_direct_pbt_identity_when_no_exceptional_row():
+    from resultagent.models import Cell, Extraction, Template
+    rows = {k: [Cell(v) for v in vals] for k, vals in {
+        "revenue": [404.91, 401.95, 261.37], "other_income": [7.81, 8.97, 6.01],
+        "total_income": [412.72, 410.92, 267.38], "total_expenses": [690.43, 681.73, 740.41],
+        "pbt": [-277.71, -270.81, -473.03], "tax": [-69.94, -68.57, -165.86],
+        "pat": [-207.77, -202.24, -307.17]}.items()}
+    v = validate(Extraction(Template.CORPORATE, "standalone", None, rows, "rules", "crore"))
+    assert v.ok and "C5@0" in v.passed

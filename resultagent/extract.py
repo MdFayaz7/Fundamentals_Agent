@@ -26,8 +26,22 @@ ROW_KEYS: dict[Template, tuple[str, ...]] = {
 _UNSCALED = {"eps", "gnpa_pct", "nnpa_pct"}
 
 
+# OCR look-alikes: labels are matched on a "folded" copy of each line (same length, so match
+# offsets still index the original line, which is where numbers are read from).
+_LOOKALIKE_IN_WORD = re.compile(r"(?<=[a-z])[1|!](?=[a-z])|(?<=[a-z])0(?=[a-z])")
+
+
+def fold(s: str) -> str:
+    s = "".join(c.lower() if c.isascii() else c for c in s).replace("l", "i")
+    return _LOOKALIKE_IN_WORD.sub(lambda m: "o" if m.group() == "0" else "i", s)
+
+
+def _fold_pattern(p: str) -> str:
+    return "".join(c.lower() if c.isascii() else c for c in p).replace("l", "i")
+
+
 def _rx(*patterns: str) -> list[re.Pattern]:
-    return [re.compile(p, re.IGNORECASE) for p in patterns]
+    return [re.compile(_fold_pattern(p)) for p in patterns]
 
 
 # A label not preceded by "before" on its line ("Profit before share of profit of
@@ -107,8 +121,8 @@ _PAT_PLAIN = _rx(
     _NOT_SHARE
     + r"profit\s*(?:/\s*[\(\{]\s*loss\s*[\)\}]\s*)?(?:after\s+tax|for\s+the\s+period)"
 )
-_CONTINUING = re.compile(r"continuing\s+operations", re.IGNORECASE)
-_DISCONTINUED = re.compile(r"discontinued", re.IGNORECASE)
+_CONTINUING = _rx(r"continuing\s+operations")[0]
+_DISCONTINUED = _rx(r"discontinued")[0]
 
 _TAX_PARTS = _rx(r"current\s*tax", r"deferred\s*tax", r"earlier\s*years?")
 
@@ -116,14 +130,13 @@ _UNIT_TOKENS = re.compile(r"\b(?:rs|inr|cr|crores?|lakhs?|mn|millions?)\b\.?", r
 
 
 def detect_template(page_text: str) -> Template | None:
-    t = page_text.lower()
-    if "interest earned" in t and re.search(r"interest\s*expend", t):
+    t = re.sub(r"\s+", " ", fold(page_text))
+    has = lambda phrase: _fold_pattern(phrase) in t  # noqa: E731
+    if has("interest earned") and re.search(r"interest\s*expend", t):
         return Template.BANK
-    if "interest income" in t and (
-        "impairment on financial instruments" in t or "finance cost" in t
-    ):
+    if has("interest income") and (has("impairment on financial instruments") or has("finance cost")):
         return Template.LENDER
-    if "revenue from operations" in t or "total income" in t:
+    if has("revenue from operations") or has("total income"):
         return Template.CORPORATE
     return None
 
@@ -153,7 +166,7 @@ def _cells_at(lines: list[str], i: int, end: int) -> list[Cell]:
 def _matches(lines: list[str], pattern: re.Pattern):
     """Yield (line_index, line, cells) for each line matching pattern with >=1 cell."""
     for i, line in enumerate(lines):
-        m = pattern.search(line)
+        m = pattern.search(fold(line))
         if not m:
             continue
         cells = _cells_at(lines, i, m.end())
@@ -176,11 +189,11 @@ def _corporate_pat(lines: list[str]) -> list[Cell] | None:
         (line, cells)
         for p in _PAT_PLAIN
         for _, line, cells in _matches(lines, p)
-        if not _DISCONTINUED.search(line)
+        if not _DISCONTINUED.search(fold(line))
     ]
     for k, (line, cells) in enumerate(hits):
-        if _CONTINUING.search(line) and any(
-            not _CONTINUING.search(later) for later, _ in hits[k + 1:]
+        if _CONTINUING.search(fold(line)) and any(
+            not _CONTINUING.search(fold(later)) for later, _ in hits[k + 1:]
         ):
             continue
         return cells

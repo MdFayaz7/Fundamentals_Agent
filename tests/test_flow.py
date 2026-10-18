@@ -75,7 +75,9 @@ def filing(exchange="NSE", fid="1", isin="INE040A01034", subject="Financial Resu
 def make(settings, tmp_path, pdf, router=None, tg=None):
     store = Store(tmp_path / "t.db")
     tg = tg or FakeTg()
-    return Pipeline(settings, store, FakeHttp(pdf), router, tg, now=lambda: NOW), store, tg
+    p = Pipeline(settings, store, FakeHttp(pdf), router, tg, now=lambda: NOW)
+    p.use_ocr = False  # OCR accuracy is measured on real filings (scripts/accuracy_check.py)
+    return p, store, tg
 
 
 async def test_rules_verified_flash(settings, tmp_path):

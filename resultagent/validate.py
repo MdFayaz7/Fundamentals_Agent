@@ -23,6 +23,15 @@ def _c3() -> list[Variant]:
     ]
 
 
+def _direct_pbt() -> list[Variant]:
+    """Total income − total expenses (± exceptional, + associates) ≈ PBT. Checks the middle of
+    the statement when the 'profit before exceptional items' row is absent (common)."""
+    return [
+        _v(("total_income", 1), ("total_expenses", -1), ("associates", a), ("exceptional", s), ("pbt", -1))
+        for a, s in product((0, 1), (1, -1))
+    ]
+
+
 def _c4() -> list[Variant]:
     return [_v(("pbt", 1), ("tax", -1), ("associates", a), ("pat", -1)) for a in (0, 1)]
 
@@ -36,6 +45,7 @@ _IDENTITIES: dict[Template, list[tuple[str, list[Variant]]]] = {
             for a in (0, 1)
         ]),
         ("C3", _c3()),
+        ("C5", _direct_pbt()),
         ("C4", _c4()),
     ],
     Template.BANK: [
@@ -44,6 +54,9 @@ _IDENTITIES: dict[Template, list[tuple[str, list[Variant]]]] = {
                    ("ppop", -1))]),
         ("B3", [_v(("ppop", 1), ("provisions", -1), ("exceptional", s), ("pbt", -1))
                 for s in (1, -1)]),
+        # Banks that print no operating-profit row.
+        ("B5", [_v(("total_income", 1), ("interest_expended", -1), ("opex", -1), ("provisions", -1),
+                   ("exceptional", s), ("pbt", -1)) for s in (1, -1)]),
         ("B4", [_v(("pbt", 1), ("tax", -1), ("pat", -1))]),
     ],
     Template.LENDER: [
@@ -51,9 +64,14 @@ _IDENTITIES: dict[Template, list[tuple[str, list[Variant]]]] = {
         ("L2", [_v(("total_income", 1), ("total_expenses", -1),
                    ("pbt_before_exceptional", -1))]),
         ("L3", _c3()),
+        ("L5", _direct_pbt()),
         ("L4", _c4()),
     ],
 }
+
+# Fallback identities only run when the row they stand in for is missing in that column,
+# so they never double-count evidence for a repair.
+_FALLBACK_FOR = {"C5": "pbt_before_exceptional", "L5": "pbt_before_exceptional", "B5": "ppop"}
 
 _DECIMAL_LOSS_KEYS = ("finance_cost", "depreciation")
 _NEVER_REPAIR = {"pat"}
@@ -104,8 +122,13 @@ class _Checker:
             return None
         return any(self._variant_ok(var, col) for var in variants)
 
+    def active(self, col: int) -> list[tuple[str, list[Variant]]]:
+        return [(n, vs) for n, vs in self.identities
+                if n not in _FALLBACK_FOR or self.ex.val(_FALLBACK_FOR[n], col) is None]
+
     def statuses(self, col: int) -> dict[str, bool | None]:
-        return {name: self.status(vs, col) for name, vs in self.identities}
+        act = {n for n, _ in self.active(col)}
+        return {name: self.status(vs, col) if name in act else None for name, vs in self.identities}
 
     def solve(self, var: Variant, key: str, col: int) -> float:
         coef = dict(var)[key]
@@ -133,7 +156,7 @@ def _repair_decimal_loss(ex: Extraction, repaired: list[str]) -> None:
 def _repair_column(chk: _Checker, col: int, repaired: list[str]) -> None:
     ex = chk.ex
     before = chk.statuses(col)
-    for name, variants in chk.identities:
+    for name, variants in chk.active(col):
         if before[name] is not False:
             continue
         for key in _keys(variants):
@@ -141,7 +164,7 @@ def _repair_column(chk: _Checker, col: int, repaired: list[str]) -> None:
                 continue
             cells = ex.rows[key]
             involved = [
-                n for n, vs in chk.identities
+                n for n, vs in chk.active(col)
                 if _mandatory(vs, key) and chk.evaluable(vs, col)
             ]
             if not cells[col].anomaly and len(involved) < 2:
