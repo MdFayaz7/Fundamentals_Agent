@@ -30,7 +30,8 @@ explicit confidence level — the algo must never act on numbers we are not sure
 **Non-goals (v1)**
 - No second "verified from XBRL" alert (user decided flash is enough).
 - No buy/sell execution, no broker integration (future algo project).
-- No OCR of scanned/image-only PDFs (they get a headline-only alert).
+- No local OCR engine (tesseract). Scanned/image-only result pages are read by a
+  free **vision LLM** instead (see §5 item 8); if no vision capacity, headline-only.
 - No analyst-consensus "beat/miss" (needs paid data); judge vs company's own history.
 - No WhatsApp (Telegram only; WhatsApp bots need paid Business API).
 - No web dashboard.
@@ -67,6 +68,13 @@ PDF facts (6 samples: HDFCBANK, INDIACEM, KROSS, ROSSARI, LAGNAM, IDBI):
 - Bank PDFs use a different statement (Interest earned, Interest expended,
   Operating profit, Provisions, GNPA/NNPA %).
 
+**Scanned PDFs are common (measured on 21 random BSE result PDFs, 10–17 Oct 2026):**
+~50% have a typed cover letter but the results table is an **image** (e.g. HCL Tech,
+Tejas Networks, HDB Financial). Text extraction finds nothing on those. Some others
+have a poor OCR text layer (IDBI, Kross). So a vision path is required for useful
+coverage. Free OpenRouter vision models seen 2026-10-18: `google/gemma-4-31b-it:free`,
+`google/gemma-4-26b-a4b-it:free`, `nvidia/nemotron-3.5-super-vl:free`.
+
 Free LLM limits (Oct 2026): Groq (OpenAI-compatible, `https://api.groq.com/openai/v1`)
 ~30 RPM / ~1K RPD / 100–200K tokens per day **per model**; JSON mode supported.
 OpenRouter (`https://openrouter.ai/api/v1`) `:free` models 20 RPM, **50 RPD** (1,000 RPD
@@ -86,8 +94,8 @@ season is 300–500 results/day, so LLM capacity is scarce and must be budgeted.
 ## 5. Architecture (Claude's call)
 
 Single Python 3.11+ asyncio process, one systemd service. Minimal dependencies:
-`curl_cffi` (HTTP with Chrome TLS fingerprint — NSE, BSE, Telegram, LLMs) and
-`pypdfium2` (PDF text). Stdlib `sqlite3` for state. Both deps ship aarch64 wheels.
+`curl_cffi` (HTTP with Chrome TLS fingerprint — NSE, BSE, Telegram, LLMs),
+`pypdfium2` (PDF text + page rendering) and `Pillow` (JPEG encode of rendered pages). Stdlib `sqlite3` for state. Both deps ship aarch64 wheels.
 
 ```
  NSE poller ─┐                                       ┌─> Telegram sendMessage (flash)
@@ -123,8 +131,12 @@ Components (one module each):
    `Interest earned + Other income ≈ Total income`, `Total income − Interest
    expended − Opex ≈ Operating profit`. Each column validated independently.
 8. **LLM fallback extractor** — only if rules fail validation (or find nothing):
-   send just the results page text (truncated ~6K chars) and ask for strict JSON in
-   the same schema; validate again with the same checks.
+   - *Text path* (page has a text layer but rules failed): send the results page
+     text (truncated ~6K chars), ask for strict JSON in the same schema.
+   - *Vision path* (results pages have no/garbled text): render up to 2 candidate
+     pages (image-only pages among the first 8, after the cover letter) at ~150 dpi,
+     grayscale JPEG (~150–300 KB each), send both in one request to a vision model.
+   - Validate again with the same arithmetic checks. Same 25 s budget (§10a).
 9. **Analyser (deterministic)** — metrics, flags, verdict, score (§6).
 10. **Notifier** — Telegram HTML message (§7). Retries with backoff; respects
     Telegram's 429 `retry_after`.
@@ -136,7 +148,8 @@ Components (one module each):
     `llama-3.3-70b-versatile`, `openai/gpt-oss-120b`, `openai/gpt-oss-20b`,
     `llama-3.1-8b-instant`, then OpenRouter free models). Tracks per-model daily
     and per-minute usage, honours `retry-after`, skips exhausted models.
-    **Priority: extraction fallback > commentary.** Commentary only when remaining
+    Each model entry declares `vision: bool`. **Priority: vision extraction > text
+    extraction > commentary.** Commentary only when remaining
     daily budget is above a reserve (e.g. 30%).
 13. **Store** — SQLite (WAL mode) with tables `seen_filings`, `results`, `events`,
     `llm_usage`, `scrips`. Event rows are JSON — the future algo reads them (or a
@@ -208,7 +221,10 @@ One message per company-result, ≤ ~1,000 chars, monospace block for numbers.
 `config.toml` (non-secret, documented defaults) + `.env` (secrets:
 `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`, `GROQ_API_KEY`, `OPENROUTER_API_KEY`),
 `.env` chmod 600 and git-ignored. LLM keys optional — without any, the agent still
-runs rules-only.
+runs rules-only. **Recommended:** add a one-time $10 OpenRouter credit (raises the
+free-model cap from 50 to 1,000 requests/day — needed for the vision path in peak
+season) and optionally a free Google Gemini key (OpenAI-compatible endpoint
+`https://generativelanguage.googleapis.com/v1beta/openai/`) as extra vision capacity.
 
 ## 9. Testing
 
@@ -275,5 +291,5 @@ retry constants, SQLite schema details, message wording, test fixture selection.
 ## 12. Future (not v1)
 
 Algo trigger consumer of `events`; Telegram commands (/filter, /watch, /mute);
-XBRL-based verification; OCR for scanned PDFs; WhatsApp; con-call/investor
+XBRL-based verification / fallback for unreadable PDFs; local OCR; WhatsApp; con-call/investor
 presentation summaries.
