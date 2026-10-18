@@ -31,6 +31,7 @@ _REFERER = {"NSE": "https://www.nseindia.com/", "BSE": "https://www.bseindia.com
 class Pipeline:
     extract_timeout = 25.0
     commentary_timeout = 20.0
+    pdf_retry_waits = (0, 3, 10)
 
     def __init__(self, settings: Settings, store: Store, http: Http, router: LlmRouter | None,
                  telegram: Telegram, now=lambda: datetime.now(IST)):
@@ -71,18 +72,31 @@ class Pipeline:
         async with self._locks.setdefault(f.key, asyncio.Lock()):
             if self.store.alert_today_other_exchange(f.key, f.exchange, self.now().date()):
                 return "skipped"
-            try:
-                async with self._dl:
-                    data = await self.http.get_bytes(f.pdf_url, max_bytes=MAX_PDF, timeout=30,
-                                                     headers={"Referer": _REFERER.get(f.exchange, "")})
-                info = pdftext.load_pdf(data)
-            except (HttpError, TooLarge, ValueError) as e:
-                log.warning("pdf failed %s: %s", f.pdf_url, e)
+            info = await self._fetch_pdf(f)
+            if info is None:
                 return "error"
             try:
                 return await self._analyse_pdf(f, info)
             finally:
                 pdftext.close(info)
+
+    async def _fetch_pdf(self, f: Filing):
+        """Download + open; retries twice because exchanges sometimes serve a block page briefly."""
+        for attempt, wait in enumerate(self.pdf_retry_waits):
+            await asyncio.sleep(wait)
+            try:
+                async with self._dl:
+                    data = await self.http.get_bytes(f.pdf_url, max_bytes=MAX_PDF, timeout=30,
+                                                     headers={"Referer": _REFERER.get(f.exchange, "")})
+                return pdftext.load_pdf(data)
+            except TooLarge as e:
+                log.warning("pdf too large %s: %s", f.pdf_url, e)
+                return None
+            except (HttpError, ValueError) as e:
+                if isinstance(e, HttpError) and e.status == 404:
+                    break
+                log.warning("pdf attempt %d failed %s: %s", attempt + 1, f.pdf_url, e)
+        return None
 
     async def _analyse_pdf(self, f: Filing, info) -> str:
         picked = pdftext.pick_page(pdftext.find_result_pages(info))

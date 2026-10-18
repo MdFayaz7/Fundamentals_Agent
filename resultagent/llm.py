@@ -17,7 +17,8 @@ from .store import Store
 
 log = logging.getLogger(__name__)
 NOT_FOUND = object()  # vision saw no P&L table
-_UNSCALED = {"eps", "gnpa_pct", "nnpa_pct"}
+_UNSCALED = {"eps"}
+_NOT_FROM_LLM = {"gnpa_pct", "nnpa_pct"}  # not cross-checked by any identity → never trust an AI read
 
 
 class LlmRouter:
@@ -85,32 +86,68 @@ _VISION_PROMPT = """You read Indian company quarterly financial results (SEBI fo
 Pick the CONSOLIDATED statement for companies, STANDALONE for banks.
 Return only JSON:
 {"found": true, "template": "corporate|bank|lender", "statement": "standalone|consolidated",
- "unit": "crore|lakh|million|thousand|rupees", "period_end": "YYYY-MM-DD",
- "rows": {"<key>": [current_quarter, previous_quarter, same_quarter_last_year]}}
-Use only QUARTER columns (ignore half-year/nine-month/year). Values exactly as printed,
+ "unit": "crore|lakh|million|thousand|rupees",
+ "columns": ["YYYY-MM-DD", "YYYY-MM-DD", "YYYY-MM-DD"],
+ "rows": {"<key>": [n1, n2, n3]}}
+"columns" = period-end dates of the first three QUARTER-ended columns, left to right as printed
+(ignore half-year/nine-month/year columns). Each row lists those same three columns in the
+same left-to-right order. Numbers as JSON numbers exactly as printed (no unit conversion),
 brackets = negative, null if absent. Row keys by template:
 %s
 If the images contain no profit & loss results table, return {"found": false}."""
+
+
+def _num(v) -> float | None:
+    if isinstance(v, bool) or v is None:
+        return None
+    if isinstance(v, (int, float)):
+        return float(v)
+    s = str(v).strip().replace(",", "").replace("%", "")
+    neg = s.startswith("(") and s.endswith(")")
+    try:
+        x = float(s.strip("()"))
+    except ValueError:
+        return None
+    return -x if neg else x
+
+
+def _column_order(cols) -> tuple[list[int], date | None]:
+    """Map printed columns to [current, previous quarter, same quarter last year] by their dates."""
+    try:
+        ds = [date.fromisoformat(c) for c in cols][:3]
+    except (TypeError, ValueError):
+        return [0, 1, 2], None
+    if len(ds) < 2:
+        return [0, 1, 2], (ds[0] if ds else None)
+    cur = max(range(len(ds)), key=lambda i: ds[i])
+    def near(days):
+        best = min((i for i in range(len(ds)) if i != cur),
+                   key=lambda i: abs((ds[cur] - ds[i]).days - days))
+        return best if abs((ds[cur] - ds[best]).days - days) <= 20 else None
+    prev, yoy = near(91), near(365)
+    if prev == yoy:
+        prev = None
+    return [cur, prev, yoy], ds[cur]
 
 
 def _to_extraction(obj: dict) -> Extraction | None:
     try:
         template = Template(obj["template"])
         div = UNIT_DIVISORS[obj.get("unit") or "crore"]
+        order, period = _column_order(obj.get("columns"))
         rows = {}
         for k, vals in (obj.get("rows") or {}).items():
-            if k not in ROW_KEYS[template] or not isinstance(vals, list):
+            if k not in ROW_KEYS[template] or k in _NOT_FROM_LLM or not isinstance(vals, list):
                 continue
+            vals = (vals + [None, None, None])[:3]
             cells = []
-            for v in (vals + [None, None, None])[:3]:
-                v = float(v) if isinstance(v, (int, float)) else None
+            for i in order:
+                v = _num(vals[i]) if i is not None else None
                 cells.append(Cell(None if v is None else (v if k in _UNSCALED else v / div)))
             rows[k] = cells
-        pe = obj.get("period_end")
         return Extraction(template=template,
                           statement="consolidated" if obj.get("statement") == "consolidated" else "standalone",
-                          period_end=date.fromisoformat(pe) if pe else None,
-                          rows=rows, source="llm_vision", unit=obj.get("unit") or "crore")
+                          period_end=period, rows=rows, source="llm_vision", unit=obj.get("unit") or "crore")
     except (KeyError, ValueError, TypeError):
         return None
 

@@ -127,6 +127,7 @@ async def test_seen_and_cross_exchange_dedupe(settings, tmp_path):
 
 async def test_broken_pdf_and_too_big(settings, tmp_path):
     p, _, tg = make(settings, tmp_path, b"xx")
+    p.pdf_retry_waits = (0, 0, 0)
     assert await p.process(filing()) == "error"
     p.http.pdf = HttpError(404, "nf")
     assert await p.process(filing(fid="2")) == "error"
@@ -224,3 +225,12 @@ def test_key_uses_isin_issuer_prefix():
     a = Filing("NSE", "1", "INE528G01019", "YESBANK", "", "", NOW, "")
     b = Filing("BSE", "2", "INE528G01035", "YESBANK", "", "", NOW, "", "532648")
     assert a.key == b.key == "INE528G01"
+
+
+def test_vision_columns_reordered_by_date_and_strings_parsed():
+    from resultagent.llm import _to_extraction
+    ex = _to_extraction({"template": "bank", "statement": "standalone", "unit": "crore",
+                         "columns": ["2026-09-30", "2025-09-30", "2026-06-30"],
+                         "rows": {"pat": ["19,509.96", "18641.28", "(5.0)"], "gnpa_pct": ["1.1%", 1, 1]}})
+    assert [c.value for c in ex.rows["pat"]] == [19509.96, -5.0, 18641.28]
+    assert ex.period_end == date(2026, 9, 30) and "gnpa_pct" not in ex.rows

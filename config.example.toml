@@ -47,25 +47,9 @@ rpm = 30
 rpd = 1000
 
 [[llm.models]]
-name = "groq-llama-70b"
-provider = "groq"
-model = "llama-3.3-70b-versatile"
-vision = false
-rpm = 30
-rpd = 1000
-
-[[llm.models]]
 name = "groq-gpt-oss-20b"
 provider = "groq"
 model = "openai/gpt-oss-20b"
-vision = false
-rpm = 30
-rpd = 1000
-
-[[llm.models]]
-name = "groq-llama-8b"
-provider = "groq"
-model = "llama-3.1-8b-instant"
 vision = false
 rpm = 30
 rpd = 1000
@@ -94,6 +78,15 @@ model = "google/gemma-4-26b-a4b-it:free"
 vision = true
 rpm = 20
 rpd = 50
+
+# Groq vision fallback: free tier allows only ~1,000 output tokens/min (about 1 page read per minute).
+[[llm.models]]
+name = "groq-qwen-vision"
+provider = "groq"
+model = "qwen/qwen3.8-27b"
+vision = true
+rpm = 1
+rpd = 1000
 
 # Optional Gemini (needs GEMINI_API_KEY):
 # [[llm.models]]
