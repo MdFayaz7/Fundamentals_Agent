@@ -121,7 +121,10 @@ class Pipeline:
                 vx = await llm_extract_vision(self.router, jpegs, self.extract_timeout)
                 if vx is NOT_FOUND:
                     return "no_table"
-                if vx and validate(vx).ok:
+                v = validate(vx) if vx else None
+                log.info("vision %s: %s", f.symbol or f.key,
+                         "no answer" if vx is None else ("ok" if v.ok else f"rejected {v.failed}"))
+                if v and v.ok:
                     ex, conf = vx, Confidence.LLM_VERIFIED
             if conf is None:
                 conf = Confidence.UNVERIFIED if picked else Confidence.NO_TEXT

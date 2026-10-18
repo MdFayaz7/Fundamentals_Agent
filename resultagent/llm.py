@@ -45,7 +45,7 @@ class LlmRouter:
                        timeout: float) -> str | None:
         deadline = time.monotonic() + timeout
         for m in self.cfg.models:
-            left = deadline - time.monotonic()
+            left = min(deadline - time.monotonic(), 12.0)  # one slow model must not eat the budget
             if left <= 1:
                 return None
             if not self._usable(m, vision, purpose):

@@ -54,6 +54,15 @@ vision = false
 rpm = 30
 rpd = 1000
 
+# Groq vision (fast, tried first): free tier allows only ~1,000 output tokens/min (about 1 page read per minute).
+[[llm.models]]
+name = "groq-qwen-vision"
+provider = "groq"
+model = "qwen/qwen3.8-27b"
+vision = true
+rpm = 1
+rpd = 1000
+
 # OpenRouter free vision models: rpd is 50 per day (1000 after a $10 credit top-up).
 [[llm.models]]
 name = "or-gemma-31b"
@@ -78,15 +87,6 @@ model = "google/gemma-4-26b-a4b-it:free"
 vision = true
 rpm = 20
 rpd = 50
-
-# Groq vision fallback: free tier allows only ~1,000 output tokens/min (about 1 page read per minute).
-[[llm.models]]
-name = "groq-qwen-vision"
-provider = "groq"
-model = "qwen/qwen3.8-27b"
-vision = true
-rpm = 1
-rpd = 1000
 
 # Optional Gemini (needs GEMINI_API_KEY):
 # [[llm.models]]
