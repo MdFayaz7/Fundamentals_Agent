@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from resultagent.analyse import analyse
 from resultagent.fmt import append_ai_view, fmt_cr, fmt_pct, format_flash, format_headline
@@ -85,5 +85,5 @@ def test_flash_long_flags_and_text(hdfc_truth):
 
 def test_negative_latency(hdfc_truth):
     a = analyse(hdfc_truth)
-    out = format_flash(_filing(), hdfc_truth, a, Confidence.VERIFIED, DISS.replace(second=0))
+    out = format_flash(_filing(), hdfc_truth, a, Confidence.VERIFIED, DISS - timedelta(seconds=5))
     assert "(0 s)" in out
