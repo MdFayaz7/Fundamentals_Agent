@@ -130,13 +130,14 @@ Components (one module each):
    before exceptional`, `PBT − Tax ≈ PAT (± associates/discontinued)`; bank:
    `Interest earned + Other income ≈ Total income`, `Total income − Interest
    expended − Opex ≈ Operating profit`. Each column validated independently.
-8. **LLM fallback extractor** — only if rules fail validation (or find nothing):
-   - *Text path* (page has a text layer but rules failed): send the results page
-     text (truncated ~6K chars), ask for strict JSON in the same schema.
-   - *Vision path* (results pages have no/garbled text): render up to 2 candidate
-     pages (image-only pages among the first 8, after the cover letter) at ~150 dpi,
-     grayscale JPEG (~150–300 KB each), send both in one request to a vision model.
-   - Validate again with the same arithmetic checks. Same 25 s budget (§10a).
+8. **Vision fallback extractor** — only if rules fail validation (or find nothing).
+   Many "text" PDFs carry an invisible OCR text layer with digit slips (verified:
+   HDFC Bank's text says PAT 19,609.96 Cr, XBRL truth 19,509.96; India Cements tax
+   8.35 vs 8.95). Re-reading bad text with an LLM cannot fix that, so the fallback
+   always **looks at the page image**: render the rule-selected result page (if one
+   was found) or up to 2 candidate image-only pages among the first 8, at ~150 dpi,
+   grayscale JPEG (~150–300 KB each), one request to a vision model, strict JSON in
+   the same schema, then the same arithmetic checks. Same 25 s budget (§10a).
 9. **Analyser (deterministic)** — metrics, flags, verdict, score (§6).
 10. **Notifier** — Telegram HTML message (§7). Retries with backoff; respects
     Telegram's 429 `retry_after`.
@@ -148,8 +149,8 @@ Components (one module each):
     `llama-3.3-70b-versatile`, `openai/gpt-oss-120b`, `openai/gpt-oss-20b`,
     `llama-3.1-8b-instant`, then OpenRouter free models). Tracks per-model daily
     and per-minute usage, honours `retry-after`, skips exhausted models.
-    Each model entry declares `vision: bool`. **Priority: vision extraction > text
-    extraction > commentary.** Commentary only when remaining
+    Each model entry declares `vision: bool`. **Priority: vision extraction >
+    commentary** (text-only models are used for commentary). Commentary only when remaining
     daily budget is above a reserve (e.g. 30%).
 13. **Store** — SQLite (WAL mode) with tables `seen_filings`, `results`, `events`,
     `llm_usage`, `scrips`. Event rows are JSON — the future algo reads them (or a
