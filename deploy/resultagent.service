@@ -1,0 +1,19 @@
+[Unit]
+Description=Results Flash Agent (NSE/BSE results -> Telegram)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=__USER__
+WorkingDirectory=__DIR__
+ExecStart=__DIR__/.venv/bin/python -m resultagent run --config __DIR__/config.toml --env __DIR__/.env
+Restart=always
+RestartSec=10
+MemoryMax=600M
+Nice=5
+Environment=PYTHONUNBUFFERED=1
+NoNewPrivileges=true
+ProtectSystem=full
+
+[Install]
+WantedBy=multi-user.target
