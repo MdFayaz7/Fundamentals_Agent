@@ -11,18 +11,22 @@ read -rsp "Wi-Fi password: " PASS; echo
 yaml_quote() { printf "'%s'" "${1//\'/\'\'}"; }   # YAML single-quoted string
 
 sudo apt-get install -y -q iw >/dev/null
+sudo iw reg set IN || true
 sudo tee /etc/netplan/60-wifi.yaml >/dev/null <<EOF
 network:
   version: 2
   wifis:
     wlan0:
+      regulatory-domain: "IN"
       dhcp4: false
       addresses: [${IP}/24]
       routes: [{to: default, via: ${GW}, metric: 50}]
       nameservers: {addresses: [${GW}, 1.1.1.1, 8.8.8.8]}
       access-points:
         $(yaml_quote "$SSID"):
-          password: $(yaml_quote "$PASS")
+          auth:
+            key-management: psk     # plain WPA2; the Pi's Broadcom chip is unreliable with WPA3/SAE
+            password: $(yaml_quote "$PASS")
 EOF
 sudo chmod 600 /etc/netplan/60-wifi.yaml
 unset PASS
