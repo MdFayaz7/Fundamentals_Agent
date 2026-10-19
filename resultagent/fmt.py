@@ -130,7 +130,7 @@ def format_instant(f: Filing, alerted_at: datetime) -> str:
     """First message, sent the moment a result filing appears (edited later with the numbers)."""
     return "\n".join([
         f"⚡ <b>{escape(f.symbol or f.name)}</b> · {escape(f.name)} — results out",
-        "Reading the numbers…",
+        "Full report follows here when the company files its XBRL data (usually 1–4 h).",
         _footer(f, alerted_at),
     ])
 
