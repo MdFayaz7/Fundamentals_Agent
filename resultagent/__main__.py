@@ -14,16 +14,19 @@ from .telegram import Telegram
 
 
 def main() -> None:
-    p = argparse.ArgumentParser(prog="resultagent")
-    p.add_argument("--config", default="config.toml")
-    p.add_argument("--env", default=".env")
+    # --config/--env work before or after the sub-command (the systemd unit puts them after).
+    common = argparse.ArgumentParser(add_help=False)
+    common.add_argument("--config", default=argparse.SUPPRESS)
+    common.add_argument("--env", default=argparse.SUPPRESS)
+    p = argparse.ArgumentParser(prog="resultagent", parents=[common])
+    p.set_defaults(config="config.toml", env=".env")
     sub = p.add_subparsers(dest="cmd", required=True)
-    sub.add_parser("run")
-    r = sub.add_parser("replay")
+    sub.add_parser("run", parents=[common])
+    r = sub.add_parser("replay", parents=[common])
     r.add_argument("--date", required=True, type=date.fromisoformat)
     r.add_argument("--send", action="store_true")
-    sub.add_parser("test-telegram")
-    sub.add_parser("get-chat-id")
+    sub.add_parser("test-telegram", parents=[common])
+    sub.add_parser("get-chat-id", parents=[common])
     a = p.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
     logging.getLogger("curl_cffi").setLevel(logging.WARNING)
