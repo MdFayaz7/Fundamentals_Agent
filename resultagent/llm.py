@@ -53,7 +53,9 @@ class LlmRouter:
                     headers={"Authorization": f"Bearer {m.api_key}"}, timeout=left), left)
             except (HttpError, asyncio.TimeoutError) as e:
                 status = getattr(e, "status", 0)
-                self._cooldown[m.name] = time.monotonic() + (60 if status in (0, 429) or status >= 500 else 600)
+                # transient (timeout / rate limit / server) -> 1 min; permanent (bad key, model gone) -> 6 h
+                transient = status in (0, 429) or status >= 500
+                self._cooldown[m.name] = time.monotonic() + (60 if transient else 6 * 3600)
                 log.warning("llm %s failed: %s", m.name, e)
                 continue
             tokens = (data.get("usage") or {}).get("total_tokens", 0)

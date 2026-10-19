@@ -204,6 +204,7 @@ class PostHttp:
 async def test_router_falls_back_and_respects_rpd(settings, tmp_path):
     store = Store(tmp_path / "r.db")
     cfg = settings.llm
+    cfg.models = cfg.models[:2]
     ok = {"choices": [{"message": {"content": "{}"}}], "usage": {"total_tokens": 5}}
     http = PostHttp([HttpError(429, "slow down"), ok])
     r = LlmRouter(http, store, cfg)

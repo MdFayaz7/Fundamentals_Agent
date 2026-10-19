@@ -57,3 +57,28 @@ model = "openai/gpt-oss-20b"
 vision = false
 rpm = 30
 rpd = 1000
+
+# Fallbacks: tried in order when the models above fail or hit their limits.
+[[llm.models]]
+name = "gemini-flash-lite"
+provider = "gemini"
+model = "gemini-flash-lite-latest"
+vision = false
+rpm = 10
+rpd = 250
+
+[[llm.models]]
+name = "mistral-small"
+provider = "mistral"
+model = "mistral-small-latest"
+vision = false
+rpm = 2
+rpd = 1000
+
+[[llm.models]]
+name = "or-nemotron-120b"
+provider = "openrouter"
+model = "nvidia/nemotron-3-super-120b-a12b:free"
+vision = false
+rpm = 20
+rpd = 50
