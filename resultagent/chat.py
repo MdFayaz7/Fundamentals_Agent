@@ -3,6 +3,7 @@ that may only use the saved numbers."""
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 from collections import defaultdict
 from datetime import timedelta
@@ -12,7 +13,8 @@ from .http import Http, HttpError
 import re
 
 from .llm import LlmRouter
-from .market import Market, describe
+from .market import Market, describe as bse_describe
+from .yahoo import Yahoo, describe as yahoo_describe
 from .redbox import LABELS, Fact, fmt_change, fmt_value, parse
 from .scoring import score
 from .store import Store, now_ist
@@ -20,46 +22,49 @@ from .telegram import Telegram
 
 log = logging.getLogger(__name__)
 
-SYSTEM = """You are a senior Indian equity research analyst and swing/positional trader with 20 years of
-experience in quarterly-results trading. You chat on Telegram with traders who forward result headlines.
+SYSTEM = """You are a senior Indian equity trader and research analyst (20+ years, results-season specialist).
+Traders forward quarterly-result headlines, ask what to pick, and ask about any Indian or US company.
+You give genuine, evidence-based answers.
 
-Use ONLY the facts in the sections below. Never invent or estimate a number, and never use general
-statements or assumptions to fill gaps (e.g. "such companies usually trade at a premium"). If a stock has
-no MARKET DATA, write exactly "💰 Valuation: n/a (no market data)" and "📊 Price: n/a" and base the pick
-only on the saved results and SCORE.
+EVIDENCE YOU HAVE (use only this — never invent numbers or make generic assumptions):
+- RESULTS: the headlines the user saved, with YoY/QoQ change and a fixed arithmetic SCORE (0-100).
+- MARKET DATA per stock: price & returns, position vs 50/200-day averages, RSI, result-day volume vs
+  average, 52-week high distance, P/E, forward P/E, EV/EBITDA, P/B, ROE, debt/equity, debt & cash,
+  promoter/institutional holding, analyst consensus/target, last ~5 quarters of revenue/EBITDA/profit/
+  margin, and rule-based Signals. If a field is absent, it is unknown — say "n/a", never guess.
 
-How you judge a result (in this order):
-1. Growth quality: YoY revenue, EBITDA and profit growth together. Broad-based growth beats profit-only growth.
-2. Margins: EBITDA-margin expansion (bps) = operating leverage = strong signal; contraction = warning.
-3. Earnings quality: profit growing far faster than revenue, tiny bases, or turnarounds need caution.
-4. Valuation: P/E (trailing), growth-adjusted P/E (P/E ÷ profit growth %; below 1 is cheap for the growth),
-   P/B with ROE (high P/B needs high ROE). Expensive stocks need exceptional growth.
-5. Price context: distance from 52-week high/low and today's move (already rallied hard? near high?).
-6. Size/liquidity: market cap (small caps are riskier and more volatile).
-PICKS ARE BASED ON THE RESULTS DATA THE USER PROVIDED. Rank strictly by results quality: the SCORE
-(0-100, fixed arithmetic from the saved results) decides the order. Valuation and price are context
-only: mention them in their lines, but they must NOT change the order (only break a tie when two
-scores are within 3 points). Points 4-6 below are for the Valuation/Price/Risk lines, not for ranking.
+HOW YOU DECIDE:
+1. Ranking = results first: order by SCORE (the user's results data). Valuation/technicals only break
+   near-ties (scores within 3) — never override the results.
+2. Then judge like a pro, in this order: growth consistency over recent quarters (one-off or trend?),
+   operating margin trend, balance sheet (debt, D/E, ROE), valuation vs growth (P/E, fwd P/E,
+   EV/EBITDA), price setup (trend vs 200DMA, RSI overbought/oversold, volume confirmation, extended
+   moves after the result), ownership/analyst view.
+3. Be honest: if a great result already rallied hard (overbought, far above averages), say entry risk
+   is high. If data conflicts (e.g. strong quarter but weak trend), say so.
 
-DEFAULT ANSWER = EXACTLY 6 SHORT LINES (about 60-90 words), one key point per line. Use this format for
-EVERY answer about stocks — picks, rankings, comparisons and single-stock questions ("is X good?").
-Never answer in paragraphs. Lines, in this order:
-🏆 Pick: SYMBOL — one-line thesis (score)   [for a single stock: 🏆 SYMBOL — Good/Average/Weak result, why]
-📈 Results: revenue / EBITDA / profit growth, margin change
-💰 Valuation: P/E (cheap/fair/expensive), growth-adjusted P/E, ROE
-📊 Price: vs 52-week high/low, today's move
-⚠️ Risk: the biggest one
-✅ Verdict: one line (and the runner-up if there are several stocks: "Next: SYMBOL — reason")
+DEFAULT ANSWER = EXACTLY 6 SHORT LINES (about 70-100 words), one key point per line, for EVERY stock
+question (picks, rankings, comparisons, "is X good?"). Never paragraphs. Lines in this order:
+🏆 Pick: SYMBOL — one-line thesis (score)   [single stock: 🏆 SYMBOL — Strong/Good/Average/Weak result, why]
+📈 Results & trend: key growth numbers + whether recent quarters confirm it
+💰 Valuation & quality: P/E / fwd P/E / EV-EBITDA vs growth, ROE, D/E
+📊 Technicals: trend vs 200DMA, RSI, volume, distance from 52w high
+⚠️ Risk: the single biggest risk from the data
+✅ Verdict: one line (+ "Next: SYMBOL — reason" when several stocks)
 No intro, no extra lines, no disclaimer line.
-Only in DEEP mode write a full research note (500-900 words) with sections Results, Valuation, Price,
-Risks, Verdict and "What to watch next quarter".
-Reply in the user's language. Only in DEEP mode end with "Not investment advice — verify before trading."
+For general questions about a company (what it does, is it good, valuation, trend) with no saved result,
+use the same 6 lines but base them on MARKET DATA (Business line, last quarters, valuation, technicals).
+Use the stock's own currency (₹ Cr for India, $ for US).
+Only in DEEP mode write a full research note (600-900 words): Results, Trend, Quality, Valuation,
+Technicals & entry, Risks, Verdict, What to watch next quarter; end with
+"Not investment advice — verify before trading."
+Reply in the user's language.
 """
 DEEP_WORDS = ("deep analysis", "detailed analysis", "full analysis", "in depth", "full report")
-HELP = ("I'm your results analyst.\n"
-        "• Forward or paste result headlines (e.g. RedBox posts) — I save the exact numbers.\n"
-        "• Ask anything: 'best result today?', 'top 3 this week', 'HFCL vs KROSS'. I add live price,\n"
-        "  P/E, P/B, ROE and 52-week range from BSE. Say 'deep' for a full research note.\n"
+HELP = ("I'm your stock analyst (India + US).\n"
+        "• Forward/paste result headlines (e.g. RedBox) — I save the exact numbers.\n"
+        "• Ask anything: 'best result today?', 'is Apple a good buy?', 'TCS vs Infosys', 'about Reliance'.\n"
+        "  I use live data: price trend, RSI, volume, P/E, EV/EBITDA, ROE, debt, last 5 quarters.\n"
         "Commands: /analyze SYMBOL (deep report) · /today · /list SYMBOL · /forget\n"
         "Owner only: /users · /allow ID · /deny ID")
 
@@ -87,6 +92,7 @@ class ChatBot:
     def __init__(self, settings: Settings, store: Store, http: Http, router: LlmRouter | None, tg: Telegram):
         self.s, self.store, self.http, self.router, self.tg = settings, store, http, router, tg
         self.market = Market(http, store) if http else None
+        self.yahoo = Yahoo() if http else None
         self.owner = str(tg.chat_id)
         self.env_allowed = set(settings.telegram.allowed_ids)
 
@@ -207,14 +213,19 @@ class ChatBot:
         groups = _group(rows)
         scored = sorted(((score(fs)[0], k, fs, saved) for k, (fs, saved) in groups.items()),
                         key=lambda x: (x[0], x[3]), reverse=True)[:150]
-        # Live valuation for the stocks the question is about, plus the top-scored recent results.
-        words = set(re.findall(r"[A-Z][A-Z0-9&.\-]{1,24}", question.upper()))
         saved_syms = [k[0] for _, k, _, _ in scored]
-        wanted = [s for s in saved_syms if s in words]
-        known = self.store.known_symbols() if self.market else set()
-        wanted += [w for w in words if w in known and w not in wanted]
-        wanted += [s for s in saved_syms if s not in wanted][: max(0, 8 - len(wanted))]
-        snaps = await self.market.snapshots(wanted[:10]) if self.market and wanted else {}
+        tickers = await self._resolve(question, saved_syms)
+        if not tickers:  # generic question ("best today?"): the top-scored saved results
+            tickers = [f"{s}.NS" for s in saved_syms[:6]]
+        tickers = tickers[:6]
+        # Yahoo = main evidence (trend, quality, technicals); BSE fills in for NSE stocks Yahoo lacks.
+        ys = await asyncio.gather(*(self.yahoo.stock(x) for x in tickers)) if self.yahoo else []
+        evidence = {x: yahoo_describe(y) for x, y in zip(tickers, ys) if y}
+        missing = [x[:-3] for x in tickers if x not in evidence and x.endswith(".NS")]
+        if missing and self.market:
+            for s, snap in (await self.market.snapshots(missing)).items():
+                evidence[s] = bse_describe(snap)
+        snaps = {(y or {}).get("symbol"): y for y in ys if y}
 
         lines = []
         for sc, k, fs, saved in scored:
@@ -225,12 +236,34 @@ class ChatBot:
             if snap and snap.get("pe") and pat and pat.change and pat.change > 0:
                 line += f" | growth-adjusted P/E {snap['pe'] / pat.change:.2f}"
             lines.append(line)
-        market = "\n".join(describe(s) for s in snaps.values()) or "(none fetched)"
+        market = "\n".join(evidence.values()) or "(none fetched)"
         notes = "\n".join(f"- [{at[5:16]}] {t[:400]}" for t, at in self.store.notes()) or "(none)"
         return (f"Today is {now_ist():%Y-%m-%d %H:%M} IST.\n\n"
                 f"RESULTS (saved, best score first):\n{chr(10).join(lines) or '(no results saved yet)'}\n\n"
-                f"MARKET DATA (live from BSE; P/E is trailing 12 months):\n{market}\n\n"
+                f"MARKET DATA (Yahoo Finance/BSE; P/E trailing 12m; quarterly trend may lag the newest result — "
+                f"check its dates):\n{market}\n\n"
                 f"NOTES (forwarded news):\n{notes}")
+
+    async def _resolve(self, question: str, saved: list[str]) -> list[str]:
+        """Yahoo tickers for the companies a question is about: saved result symbols, NSE symbols typed
+        in capitals, then any company/ticker the AI spots (verified through Yahoo search)."""
+        up = question.upper()
+        out = [f"{s}.NS" for s in saved if re.search(rf"(?<![A-Z0-9]){re.escape(s)}(?![A-Z0-9])", up)]
+        caps = set(re.findall(r"(?<![A-Za-z0-9])[A-Z][A-Z0-9&\-]{1,19}(?![A-Za-z0-9])", question))  # typed in CAPS
+        known = self.store.known_symbols() if self.market else set()
+        out += [f"{w}.NS" for w in caps if w in known and f"{w}.NS" not in out]
+        if out or not (self.router and self.yahoo):
+            return out
+        reply = await self.router.complete(
+            [{"role": "system", "content": "List the companies or stock tickers (Indian or US) the user asks about. "
+              'Return JSON {"names": ["..."]} (official name or ticker); {"names": []} if none.'},
+             {"role": "user", "content": question}], purpose="extract", timeout=12, per_model=6, max_tokens=300)
+        try:
+            names = [str(n) for n in json.loads(reply or "{}").get("names", [])][:4]
+        except ValueError:
+            names = []
+        found = await asyncio.gather(*(self.yahoo.search(n) for n in names), return_exceptions=True)
+        return [x for x in found if isinstance(x, str)]
 
     async def answer(self, question: str, cid: str = "", deep: bool = False) -> str:
         if not self.router:
