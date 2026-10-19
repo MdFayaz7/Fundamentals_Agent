@@ -52,7 +52,7 @@ async def test_question_uses_saved_data_and_remembers_chat(bot):
     await bot.handle({"message_id": 1, "text": HFCL})
     assert await bot.handle({"message_id": 2, "text": "best result today?"}) == "answered"
     system = bot.router.messages[0]["content"]
-    assert "HFCL Q2 (cons): Revenue ₹2,540 Cr (+144% YOY)" in system
+    assert "HFCL Q2 (cons): Revenue ₹2,540 Cr (+144% YOY)" in system and "SCORE" in system
     assert bot.tg.sent[-1].startswith("HFCL is the best")
     await bot.handle({"message_id": 3, "text": "why?"})
     roles = [m["role"] for m in bot.router.messages]
@@ -61,7 +61,7 @@ async def test_question_uses_saved_data_and_remembers_chat(bot):
 
 async def test_forwarded_news_becomes_note(bot):
     assert await bot.handle({"message_id": 1, "text": "Sebi tightens F&O rules", "forward_date": 1}) == "note"
-    assert "Sebi tightens" in bot.context()
+    assert "Sebi tightens" in await bot.context("news?")
 
 
 async def test_commands(bot):

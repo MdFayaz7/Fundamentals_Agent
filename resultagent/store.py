@@ -23,6 +23,8 @@ CREATE TABLE IF NOT EXISTS llm_usage (
     day TEXT NOT NULL, model TEXT NOT NULL, requests INTEGER NOT NULL, tokens INTEGER NOT NULL,
     PRIMARY KEY (day, model));
 CREATE TABLE IF NOT EXISTS kv (k TEXT PRIMARY KEY, v TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS scrips (code TEXT PRIMARY KEY, symbol TEXT NOT NULL, name TEXT NOT NULL, isin TEXT);
+CREATE INDEX IF NOT EXISTS scrips_symbol ON scrips(symbol);
 CREATE TABLE IF NOT EXISTS users (id TEXT PRIMARY KEY, name TEXT NOT NULL, status TEXT NOT NULL, at TEXT NOT NULL);
 """
 
@@ -116,6 +118,24 @@ class Store:
 
     def users(self) -> list[tuple[str, str, str]]:
         return self._db.execute("SELECT id, name, status FROM users ORDER BY status, at").fetchall()
+
+    # ---- BSE scrip master ----
+    def save_scrips(self, rows: list[tuple]) -> None:
+        with self._db:
+            self._db.executemany("INSERT OR REPLACE INTO scrips VALUES(?,?,?,?)", rows)
+
+    def scrip_count(self) -> int:
+        return self._db.execute("SELECT count(*) FROM scrips").fetchone()[0]
+
+    def scrip_code(self, symbol: str) -> str | None:
+        """BSE code for an NSE-style symbol (BSE ids usually match; else first word of the name)."""
+        r = self._db.execute("SELECT code FROM scrips WHERE symbol=?", (symbol.upper(),)).fetchone() or \
+            self._db.execute("SELECT code FROM scrips WHERE upper(name) LIKE ? ORDER BY length(name) LIMIT 1",
+                             (symbol.upper() + "%",)).fetchone()
+        return r[0] if r else None
+
+    def known_symbols(self) -> set[str]:
+        return {r[0] for r in self._db.execute("SELECT symbol FROM scrips")}
 
     # ---- key/value ----
     def get(self, k: str, default: str | None = None) -> str | None:
