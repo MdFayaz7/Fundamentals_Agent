@@ -1,45 +1,33 @@
-"""SQLite persistence: filing dedupe, alerts, events, LLM usage, scrip master."""
+"""SQLite memory: saved result facts, notes, chat history, LLM usage, small key/value state."""
 from __future__ import annotations
 
-import json
 import sqlite3
-from datetime import date, datetime, timezone
+from datetime import date, datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
-_IST = ZoneInfo("Asia/Kolkata")
-_SCRIP_COLS = ("code", "isin", "symbol", "name", "mcap_cr", "grp")
+from .redbox import Fact
+
+IST = ZoneInfo("Asia/Kolkata")
 
 _SCHEMA = """
-CREATE TABLE IF NOT EXISTS filings (
-    exchange TEXT NOT NULL, filing_id TEXT NOT NULL, key TEXT, state TEXT NOT NULL,
-    updated_ist_date TEXT NOT NULL,
-    PRIMARY KEY (exchange, filing_id));
-CREATE TABLE IF NOT EXISTS alerts (
-    key TEXT NOT NULL, period_end TEXT NOT NULL, statement TEXT NOT NULL,
-    exchange TEXT, filing_id TEXT, message_id INTEGER, ist_date TEXT NOT NULL,
-    PRIMARY KEY (key, period_end, statement));
-CREATE TABLE IF NOT EXISTS events (
-    id INTEGER PRIMARY KEY AUTOINCREMENT, created_at TEXT NOT NULL,
-    key TEXT, symbol TEXT, period_end TEXT, confidence REAL, json TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS facts (
+    symbol TEXT NOT NULL, period TEXT NOT NULL, statement TEXT NOT NULL, metric TEXT NOT NULL,
+    basis TEXT NOT NULL, value REAL NOT NULL, prev REAL NOT NULL, is_pct INTEGER NOT NULL,
+    saved_at TEXT NOT NULL,
+    PRIMARY KEY (symbol, period, statement, metric, basis));
+CREATE TABLE IF NOT EXISTS notes (id INTEGER PRIMARY KEY AUTOINCREMENT, text TEXT NOT NULL, saved_at TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS chat (id INTEGER PRIMARY KEY AUTOINCREMENT, role TEXT NOT NULL, text TEXT NOT NULL,
+    at TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS llm_usage (
     day TEXT NOT NULL, model TEXT NOT NULL, requests INTEGER NOT NULL, tokens INTEGER NOT NULL,
     PRIMARY KEY (day, model));
-CREATE TABLE IF NOT EXISTS scrips (
-    code TEXT PRIMARY KEY, isin TEXT, symbol TEXT, name TEXT, mcap_cr REAL, grp TEXT);
-CREATE INDEX IF NOT EXISTS scrips_isin ON scrips(isin);
-CREATE TABLE IF NOT EXISTS xbrl (
-    symbol TEXT NOT NULL, statement TEXT NOT NULL, period_end TEXT NOT NULL, json TEXT NOT NULL,
-    PRIMARY KEY (symbol, statement, period_end));
+CREATE TABLE IF NOT EXISTS kv (k TEXT PRIMARY KEY, v TEXT NOT NULL);
 """
 
 
-def _ist_today() -> date:
-    return datetime.now(_IST).date()
-
-
-def _iso(v) -> str | None:
-    return None if v is None else (v.isoformat() if isinstance(v, date) else str(v))
+def now_ist() -> datetime:
+    return datetime.now(IST).replace(microsecond=0)
 
 
 class Store:
@@ -55,127 +43,64 @@ class Store:
     def close(self) -> None:
         self._db.close()
 
-    def seen(self, exchange: str, filing_id: str) -> bool:
-        r = self._db.execute(
-            "SELECT 1 FROM filings WHERE exchange=? AND filing_id=?", (exchange, filing_id)
-        ).fetchone()
-        return r is not None
-
-    def mark(self, exchange: str, filing_id: str, key: str, state: str) -> None:
+    # ---- results ----
+    def save_facts(self, facts: list[Fact], at: datetime | None = None) -> None:
+        """Latest post wins for the same company / period / statement / metric."""
+        at = (at or now_ist()).isoformat()
         with self._db:
-            self._db.execute(
-                "INSERT INTO filings(exchange, filing_id, key, state, updated_ist_date) "
-                "VALUES(?,?,?,?,?) ON CONFLICT(exchange, filing_id) DO UPDATE SET "
-                "key=excluded.key, state=excluded.state, updated_ist_date=excluded.updated_ist_date",
-                (exchange, filing_id, key, state, _ist_today().isoformat()),
-            )
+            self._db.executemany(
+                "INSERT OR REPLACE INTO facts VALUES (?,?,?,?,?,?,?,?,?)",
+                [(f.symbol, f.period, f.statement, f.metric, f.basis, f.value, f.prev, int(f.is_pct), at)
+                 for f in facts])
 
-    def alert_today_other_exchange(self, key: str, exchange: str, ist_date: date) -> bool:
-        r = self._db.execute(
-            "SELECT 1 FROM alerts WHERE key=? AND ist_date=? AND exchange<>? LIMIT 1",
-            (key, ist_date.isoformat(), exchange),
-        ).fetchone()
-        return r is not None
+    def facts(self, symbol: str | None = None, since: datetime | None = None) -> list[tuple[Fact, str]]:
+        q, args = "SELECT * FROM facts WHERE 1=1", []
+        if symbol:
+            q, args = q + " AND symbol=?", args + [symbol.upper()]
+        if since:
+            q, args = q + " AND saved_at>=?", args + [since.isoformat()]
+        rows = self._db.execute(q + " ORDER BY saved_at, symbol, metric", args).fetchall()
+        return [(Fact(r[0], r[1], r[2], r[3], r[5], r[6], r[4], bool(r[7])), r[8]) for r in rows]
 
-    def alert_exists(self, key: str, period_end: date, statement: str) -> bool:
-        r = self._db.execute(
-            "SELECT 1 FROM alerts WHERE key=? AND period_end=? AND statement=?",
-            (key, period_end.isoformat(), statement),
-        ).fetchone()
-        return r is not None
-
-    def alert_statements(self, key: str, period_end: date) -> set[str]:
-        rows = self._db.execute(
-            "SELECT statement FROM alerts WHERE key=? AND period_end=?",
-            (key, period_end.isoformat()),
-        ).fetchall()
-        return {r[0] for r in rows}
-
-    def save_alert(self, key: str, period_end: date, statement: str, exchange: str,
-                   filing_id: str, message_id: int | None, ist_date: date) -> None:
+    # ---- notes & chat ----
+    def add_note(self, text: str) -> None:
         with self._db:
-            self._db.execute(
-                "INSERT OR IGNORE INTO alerts(key, period_end, statement, exchange, filing_id, "
-                "message_id, ist_date) VALUES(?,?,?,?,?,?,?)",
-                (key, period_end.isoformat(), statement, exchange, filing_id, message_id,
-                 ist_date.isoformat()),
-            )
+            self._db.execute("INSERT INTO notes(text, saved_at) VALUES(?,?)", (text, now_ist().isoformat()))
 
-    def alert_message_id(self, key: str, period_end: date) -> int | None:
-        """Telegram message of the earliest alert for this result (the instant ping)."""
-        r = self._db.execute(
-            "SELECT message_id FROM alerts WHERE key=? AND period_end=? AND message_id IS NOT NULL "
-            "ORDER BY rowid LIMIT 1", (key, period_end.isoformat())).fetchone()
-        return r[0] if r else None
+    def notes(self, limit: int = 15) -> list[tuple[str, str]]:
+        rows = self._db.execute("SELECT text, saved_at FROM notes ORDER BY id DESC LIMIT ?", (limit,)).fetchall()
+        return rows[::-1]
 
-    def xbrl_get(self, symbol: str, statement: str, period_end: date) -> dict | None:
-        r = self._db.execute("SELECT json FROM xbrl WHERE symbol=? AND statement=? AND period_end=?",
-                             (symbol, statement, period_end.isoformat())).fetchone()
-        return json.loads(r[0]) if r else None
-
-    def xbrl_put(self, symbol: str, statement: str, period_end: date, value: dict) -> None:
+    def add_chat(self, role: str, text: str) -> None:
         with self._db:
-            self._db.execute("INSERT OR REPLACE INTO xbrl VALUES(?,?,?,?)",
-                             (symbol, statement, period_end.isoformat(), json.dumps(value)))
+            self._db.execute("INSERT INTO chat(role, text, at) VALUES(?,?,?)", (role, text, now_ist().isoformat()))
 
-    def add_event(self, payload: dict) -> int:
+    def chat(self, limit: int = 10) -> list[tuple[str, str]]:
+        rows = self._db.execute("SELECT role, text FROM chat ORDER BY id DESC LIMIT ?", (limit,)).fetchall()
+        return rows[::-1]
+
+    def clear_chat(self) -> None:
         with self._db:
-            cur = self._db.execute(
-                "INSERT INTO events(created_at, key, symbol, period_end, confidence, json) "
-                "VALUES(?,?,?,?,?,?)",
-                (datetime.now(timezone.utc).isoformat(), payload.get("key"), payload.get("symbol"),
-                 _iso(payload.get("period_end")), payload.get("confidence"),
-                 json.dumps(payload, default=str)),
-            )
-        return int(cur.lastrowid)
+            self._db.execute("DELETE FROM chat")
 
+    # ---- LLM usage (router quotas) ----
     def llm_usage(self, day: date, model: str) -> tuple[int, int]:
-        r = self._db.execute(
-            "SELECT requests, tokens FROM llm_usage WHERE day=? AND model=?",
-            (day.isoformat(), model),
-        ).fetchone()
+        r = self._db.execute("SELECT requests, tokens FROM llm_usage WHERE day=? AND model=?",
+                             (day.isoformat(), model)).fetchone()
         return (r[0], r[1]) if r else (0, 0)
 
     def add_llm_usage(self, day: date, model: str, requests: int, tokens: int) -> None:
         with self._db:
             self._db.execute(
-                "INSERT INTO llm_usage(day, model, requests, tokens) VALUES(?,?,?,?) "
-                "ON CONFLICT(day, model) DO UPDATE SET requests=requests+excluded.requests, "
-                "tokens=tokens+excluded.tokens",
-                (day.isoformat(), model, requests, tokens),
-            )
+                "INSERT INTO llm_usage VALUES(?,?,?,?) ON CONFLICT(day, model) DO UPDATE SET "
+                "requests=requests+excluded.requests, tokens=tokens+excluded.tokens",
+                (day.isoformat(), model, requests, tokens))
 
-    def upsert_scrips(self, rows: list[dict]) -> None:
+    # ---- key/value ----
+    def get(self, k: str, default: str | None = None) -> str | None:
+        r = self._db.execute("SELECT v FROM kv WHERE k=?", (k,)).fetchone()
+        return r[0] if r else default
+
+    def set(self, k: str, v: str) -> None:
         with self._db:
-            self._db.executemany(
-                "INSERT OR REPLACE INTO scrips(code, isin, symbol, name, mcap_cr, grp) "
-                "VALUES(?,?,?,?,?,?)",
-                [tuple(r.get(c) for c in _SCRIP_COLS) for r in rows],
-            )
-
-    def _scrip(self, col: str, val: str) -> dict | None:
-        r = self._db.execute(
-            f"SELECT {', '.join(_SCRIP_COLS)} FROM scrips WHERE {col}=? LIMIT 1", (val,)
-        ).fetchone()
-        return dict(zip(_SCRIP_COLS, r)) if r else None
-
-    def scrip_by_code(self, code: str) -> dict | None:
-        return self._scrip("code", code)
-
-    def scrip_by_isin(self, isin: str) -> dict | None:
-        r = self._scrip("isin", isin)
-        if r is None and len(isin) >= 9:  # same issuer + equity, different ISIN serial
-            row = self._db.execute(
-                f"SELECT {', '.join(_SCRIP_COLS)} FROM scrips WHERE isin LIKE ? LIMIT 1", (isin[:9] + "%",)
-            ).fetchone()
-            r = dict(zip(_SCRIP_COLS, row)) if row else None
-        return r
-
-    def stats_for_day(self, ist_date: date) -> dict:
-        d = ist_date.isoformat()
-        one = lambda sql, *a: self._db.execute(sql, a).fetchone()[0]
-        return {
-            "alerts": one("SELECT COUNT(*) FROM alerts WHERE ist_date=?", d),
-            "unverified": one("SELECT COUNT(*) FROM filings WHERE state='unverified' AND updated_ist_date=?", d),
-            "errors": one("SELECT COUNT(*) FROM filings WHERE state='error' AND updated_ist_date=?", d),
-        }
+            self._db.execute("INSERT OR REPLACE INTO kv VALUES(?,?)", (k, v))

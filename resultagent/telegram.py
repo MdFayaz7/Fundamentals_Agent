@@ -55,6 +55,31 @@ class Telegram:
                                              "parse_mode": "HTML", "disable_web_page_preview": True})
         return r.get("message_id") if isinstance(r, dict) else None
 
+    async def send_text(self, text: str, reply_to: int | None = None) -> int | None:
+        """Plain text (no HTML parsing, so model output can never break it), split at 4,000 chars."""
+        mid = None
+        for i in range(0, max(len(text), 1), 4000):
+            payload = {"chat_id": self.chat_id, "text": text[i:i + 4000], "disable_web_page_preview": True}
+            if reply_to and i == 0:
+                payload["reply_parameters"] = {"message_id": reply_to, "allow_sending_without_reply": True}
+            r = await self._call("sendMessage", payload)
+            mid = r.get("message_id") if isinstance(r, dict) else mid
+        return mid
+
+    async def typing(self) -> None:
+        try:
+            await self.http.post_json(self.base + "sendChatAction", {"chat_id": self.chat_id, "action": "typing"},
+                                      timeout=10)
+        except HttpError:
+            pass
+
+    async def get_updates(self, offset: int, wait: int = 50) -> list[dict]:
+        """Long-poll for new messages (no open ports needed on the Pi)."""
+        _, data, _ = await self.http.post_json(
+            self.base + "getUpdates", {"offset": offset, "timeout": wait, "allowed_updates": ["message"]},
+            timeout=wait + 15)
+        return data.get("result", []) if isinstance(data, dict) else []
+
     async def edit(self, message_id: int, html: str) -> bool:
         r = await self._call("editMessageText", {"chat_id": self.chat_id, "message_id": message_id,
                                                  "text": html, "parse_mode": "HTML",
