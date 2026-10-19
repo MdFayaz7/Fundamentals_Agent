@@ -25,6 +25,8 @@ CREATE TABLE IF NOT EXISTS llm_usage (
 CREATE TABLE IF NOT EXISTS kv (k TEXT PRIMARY KEY, v TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS scrips (code TEXT PRIMARY KEY, symbol TEXT NOT NULL, name TEXT NOT NULL, isin TEXT);
 CREATE INDEX IF NOT EXISTS scrips_symbol ON scrips(symbol);
+CREATE INDEX IF NOT EXISTS scrips_isin ON scrips(isin);
+CREATE TABLE IF NOT EXISTS nse_isin (symbol TEXT PRIMARY KEY, isin TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS users (id TEXT PRIMARY KEY, name TEXT NOT NULL, status TEXT NOT NULL, at TEXT NOT NULL);
 """
 
@@ -127,15 +129,22 @@ class Store:
     def scrip_count(self) -> int:
         return self._db.execute("SELECT count(*) FROM scrips").fetchone()[0]
 
+    def save_nse_isins(self, rows: list[tuple[str, str]]) -> None:
+        with self._db:
+            self._db.executemany("INSERT OR REPLACE INTO nse_isin VALUES(?,?)", rows)
+
     def scrip_code(self, symbol: str) -> str | None:
-        """BSE code for an NSE-style symbol (BSE ids usually match; else first word of the name)."""
-        r = self._db.execute("SELECT code FROM scrips WHERE symbol=?", (symbol.upper(),)).fetchone() or \
+        """BSE code for an NSE symbol: exact ISIN match (most reliable), same id, then company name."""
+        s = symbol.upper()
+        r = self._db.execute("SELECT s.code FROM nse_isin n JOIN scrips s ON s.isin=n.isin WHERE n.symbol=?",
+                             (s,)).fetchone() or \
+            self._db.execute("SELECT code FROM scrips WHERE symbol=?", (s,)).fetchone() or \
             self._db.execute("SELECT code FROM scrips WHERE upper(name) LIKE ? ORDER BY length(name) LIMIT 1",
                              (symbol.upper() + "%",)).fetchone()
         return r[0] if r else None
 
     def known_symbols(self) -> set[str]:
-        return {r[0] for r in self._db.execute("SELECT symbol FROM scrips")}
+        return {r[0] for r in self._db.execute("SELECT symbol FROM scrips UNION SELECT symbol FROM nse_isin")}
 
     # ---- key/value ----
     def get(self, k: str, default: str | None = None) -> str | None:

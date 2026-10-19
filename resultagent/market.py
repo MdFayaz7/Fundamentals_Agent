@@ -14,6 +14,7 @@ log = logging.getLogger(__name__)
 _API = "https://api.bseindia.com/BseIndiaAPI/api/"
 _HDR = {"Referer": "https://www.bseindia.com/", "Origin": "https://www.bseindia.com"}
 _MASTER = _API + "ListofScripData/w?Group=&Scripcode=&industry=&segment=Equity&status=Active"
+_NSE_LIST = "https://nsearchives.nseindia.com/content/equities/EQUITY_L.csv"
 _CACHE_SECS = 600
 
 
@@ -33,7 +34,8 @@ class Market:
     async def ensure_master(self) -> None:
         """Download BSE's list of ~5,000 equities once a day (symbol, scrip code, name, market cap)."""
         last = self.store.get("scrips_at")
-        if last and now_ist().isoformat() < (last[:10] + "T23:59") and self.store.scrip_count():
+        if last and now_ist().isoformat() < (last[:10] + "T23:59") and self.store.scrip_count() \
+                and self.store.get("nse_isin_at"):
             return
         async with self._lock:
             rows = await self.http.get_json(_MASTER, headers=_HDR, timeout=40)
@@ -42,6 +44,14 @@ class Market:
                                          r.get("Scrip_Name") or "", r.get("ISIN_NUMBER") or "")
                                         for r in rows if r.get("SCRIP_CD")])
                 self.store.set("scrips_at", now_ist().isoformat())
+            try:  # NSE symbol -> ISIN (official equity list) for exact NSE->BSE mapping
+                csv = (await self.http.get_bytes(_NSE_LIST, max_bytes=5 << 20,
+                                                 headers={"Referer": "https://www.nseindia.com/"})).decode("utf-8", "ignore")
+                rows = [ln.split(",") for ln in csv.splitlines()[1:]]
+                self.store.save_nse_isins([(r[0].strip().upper(), r[6].strip()) for r in rows if len(r) > 6])
+                self.store.set("nse_isin_at", now_ist().isoformat())
+            except HttpError as e:
+                log.warning("NSE equity list failed: %s", e)
 
     async def snapshot(self, symbol: str) -> dict | None:
         """Key numbers for one stock, or None if unknown. Cached 10 minutes."""
