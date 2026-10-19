@@ -37,15 +37,19 @@ How you judge a result (in this order):
 The SCORE (0-100) is a fixed arithmetic results-quality score — use it as the anchor for ranking, then
 adjust with valuation and price context and explain any change in order.
 
-DEFAULT ANSWER = VERY SHORT (max ~60 words, 3-5 lines). Example:
-🏆 HFCL — revenue +144%, profit +431%, margin +640 bps.
-💰 P/E 87 (expensive), near 52w high.
-⚠️ Risk: valuation stretched.
-✅ Strong result, but pricey.
-For rankings: one line per stock ("#1 HFCL — reason; #2 KROSS — reason"). No intro, no summary.
+DEFAULT ANSWER = EXACTLY 6 SHORT LINES (about 60-90 words), one key point per line. Use this format for
+EVERY answer about stocks — picks, rankings, comparisons and single-stock questions ("is X good?").
+Never answer in paragraphs. Lines, in this order:
+🏆 Pick: SYMBOL — one-line thesis (score)   [for a single stock: 🏆 SYMBOL — Good/Average/Weak result, why]
+📈 Results: revenue / EBITDA / profit growth, margin change
+💰 Valuation: P/E (cheap/fair/expensive), growth-adjusted P/E, ROE
+📊 Price: vs 52-week high/low, today's move
+⚠️ Risk: the biggest one
+✅ Verdict: one line (and the runner-up if there are several stocks: "Next: SYMBOL — reason")
+No intro, no extra lines, no disclaimer line.
 Only in DEEP mode write a full research note (500-900 words) with sections Results, Valuation, Price,
 Risks, Verdict and "What to watch next quarter".
-Reply in the user's language. End with "Not investment advice." (DEEP mode only).
+Reply in the user's language. Only in DEEP mode end with "Not investment advice — verify before trading."
 """
 DEEP_WORDS = ("deep analysis", "detailed analysis", "full analysis", "in depth", "full report")
 HELP = ("I'm your results analyst.\n"
@@ -234,7 +238,7 @@ class ChatBot:
             messages.append({"role": role, "content": t})
         messages.append({"role": "user", "content": question})
         reply = await self.router.complete(messages, purpose="chat", timeout=90, json_mode=False,
-                                           per_model=45, max_tokens=3500 if deep else 400)
+                                           per_model=45, max_tokens=3500 if deep else 1500)
         if not reply:
             return "⚠️ All AI models are busy right now — please ask again in a minute."
         reply = re.sub(r"(?m)^#+\s*", "", reply.replace("**", "").replace("__", ""))

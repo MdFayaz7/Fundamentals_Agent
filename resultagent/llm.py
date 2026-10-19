@@ -49,6 +49,8 @@ class LlmRouter:
                     "max_tokens": max_tokens}
             if json_mode:
                 body["response_format"] = {"type": "json_object"}
+            if "gpt-oss" in m.model:
+                body["reasoning_effort"] = "low"  # hidden reasoning tokens otherwise eat the output budget
             try:
                 _, data, _ = await asyncio.wait_for(self.http.post_json(
                     f"{m.base_url}/chat/completions", body,
@@ -63,9 +65,14 @@ class LlmRouter:
             tokens = (data.get("usage") or {}).get("total_tokens", 0)
             self.store.add_llm_usage(date.today(), m.name, 1, tokens)
             try:
-                return data["choices"][0]["message"]["content"]
+                choice = data["choices"][0]
+                content = choice["message"]["content"]
             except (KeyError, IndexError, TypeError):
                 continue
+            if not content or choice.get("finish_reason") == "length":
+                log.warning("llm %s returned a cut-off/empty answer; trying next model", m.name)
+                continue
+            return content
         return None
 
 
