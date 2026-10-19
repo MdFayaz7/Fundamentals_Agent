@@ -36,8 +36,10 @@ How you judge a result (in this order):
    P/B with ROE (high P/B needs high ROE). Expensive stocks need exceptional growth.
 5. Price context: distance from 52-week high/low and today's move (already rallied hard? near high?).
 6. Size/liquidity: market cap (small caps are riskier and more volatile).
-The SCORE (0-100) is a fixed arithmetic results-quality score — use it as the anchor for ranking, then
-adjust with valuation and price context and explain any change in order.
+PICKS ARE BASED ON THE RESULTS DATA THE USER PROVIDED. Rank strictly by results quality: the SCORE
+(0-100, fixed arithmetic from the saved results) decides the order. Valuation and price are context
+only: mention them in their lines, but they must NOT change the order (only break a tie when two
+scores are within 3 points). Points 4-6 below are for the Valuation/Price/Risk lines, not for ranking.
 
 DEFAULT ANSWER = EXACTLY 6 SHORT LINES (about 60-90 words), one key point per line. Use this format for
 EVERY answer about stocks — picks, rankings, comparisons and single-stock questions ("is X good?").
