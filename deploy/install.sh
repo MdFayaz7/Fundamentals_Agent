@@ -6,7 +6,8 @@ cd "$DIR"
 
 python3 -c 'import sys; sys.exit(0 if sys.version_info >= (3, 11) else 1)' \
   || { echo "Python 3.11+ required"; exit 1; }
-python3 -m venv --help >/dev/null 2>&1 || { echo "Run: sudo apt-get install -y python3-venv"; exit 1; }
+# Debian/Ubuntu ship venv without ensurepip; install it once if missing.
+python3 -c 'import ensurepip' 2>/dev/null || { sudo apt-get update -q && sudo apt-get install -y -q python3-venv; }
 
 [ -d .venv ] || python3 -m venv .venv
 .venv/bin/pip install -q --upgrade pip
