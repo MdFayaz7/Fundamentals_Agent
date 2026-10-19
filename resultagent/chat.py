@@ -35,7 +35,8 @@ Rules:
 HELP = ("I'm your results analyst.\n"
         "• Forward or paste result headlines (e.g. RedBox posts) — I save the exact numbers.\n"
         "• Ask anything: 'best result today?', 'top 3 this week', 'HFCL vs KROSS'.\n"
-        "Commands: /today · /list SYMBOL · /forget (clears chat history, keeps results)")
+        "Commands: /today · /list SYMBOL · /forget (clears chat history, keeps results)\n"
+        "Owner only: /users · /allow ID · /deny ID")
 
 
 def _group(rows: list[tuple[Fact, str]]) -> dict[tuple[str, str, str], tuple[list[Fact], str]]:
@@ -60,7 +61,8 @@ def _line(key, facts: list[Fact], saved: str = "") -> str:
 class ChatBot:
     def __init__(self, settings: Settings, store: Store, http: Http, router: LlmRouter | None, tg: Telegram):
         self.s, self.store, self.http, self.router, self.tg = settings, store, http, router, tg
-        self.allowed = {str(tg.chat_id), *settings.telegram.allowed_ids}
+        self.owner = str(tg.chat_id)
+        self.env_allowed = set(settings.telegram.allowed_ids)
 
     async def run(self) -> None:
         offset = int(self.store.get("tg_offset", "0"))
@@ -80,9 +82,8 @@ class ChatBot:
                 self.store.set("tg_offset", str(offset))
                 msg = u.get("message") or {}
                 chat = msg.get("chat") or {}
-                if str(chat.get("id")) not in self.allowed:
-                    log.info("ignored message from chat %s (%s) — add it to TELEGRAM_ALLOWED_IDS to allow",
-                             chat.get("id"), chat.get("username") or chat.get("first_name") or "?")
+                if not self.is_allowed(str(chat.get("id"))):
+                    await self.request_access(chat)
                     continue
                 try:
                     await self.handle(msg)
@@ -115,9 +116,43 @@ class ChatBot:
         await say(await self.answer(text, cid))
         return "answered"
 
+    # ---- access control: the owner (TELEGRAM_CHAT_ID) decides who may chat ----
+    def is_allowed(self, cid: str) -> bool:
+        u = self.store.user(cid)
+        return cid == self.owner or (cid in self.env_allowed and not (u and u[1] == "denied")) \
+            or bool(u and u[1] == "allowed")
+
+    async def request_access(self, chat: dict) -> None:
+        cid = str(chat.get("id"))
+        name = " ".join(x for x in (chat.get("first_name"), chat.get("last_name")) if x) or "?"
+        if chat.get("username"):
+            name += f" (@{chat['username']})"
+        known = self.store.user(cid)
+        if known:  # already asked (pending) or denied: stay silent
+            return
+        self.store.set_user(cid, "pending", name)
+        log.info("access request from %s %s", cid, name)
+        await self.tg.send_text(f"👤 {name} wants to use the bot.\nAllow: /allow {cid}\nDeny: /deny {cid}")
+        await self.tg.send_text("🔒 This is a private bot. Your access request was sent to the owner.",
+                                chat_id=cid)
+
+    def admin(self, cmd: str, arg: str) -> str:
+        if cmd == "/users":
+            rows = self.store.users()
+            return "\n".join(f"{s:8} {n} — {i}" for i, n, s in rows) or "No other users yet."
+        uid = arg.strip()
+        if not uid:
+            return f"Usage: {cmd} USER_ID (see /users)"
+        if uid == self.owner:
+            return "That's you — the owner always has access."
+        self.store.set_user(uid, "allowed" if cmd == "/allow" else "denied")
+        return f"✅ {uid} can now use the bot." if cmd == "/allow" else f"⛔ {uid} is blocked."
+
     def command(self, text: str, cid: str = "") -> str:
         cmd, _, arg = text.partition(" ")
         cmd = cmd.split("@")[0].lower()
+        if cmd in ("/allow", "/deny", "/users"):
+            return self.admin(cmd, arg) if cid == self.owner else "Only the owner can manage users."
         if cmd == "/today":
             rows = self.store.facts(since=now_ist().replace(hour=0, minute=0, second=0))
             groups = _group(rows)

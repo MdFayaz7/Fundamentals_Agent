@@ -23,6 +23,7 @@ CREATE TABLE IF NOT EXISTS llm_usage (
     day TEXT NOT NULL, model TEXT NOT NULL, requests INTEGER NOT NULL, tokens INTEGER NOT NULL,
     PRIMARY KEY (day, model));
 CREATE TABLE IF NOT EXISTS kv (k TEXT PRIMARY KEY, v TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS users (id TEXT PRIMARY KEY, name TEXT NOT NULL, status TEXT NOT NULL, at TEXT NOT NULL);
 """
 
 
@@ -101,6 +102,20 @@ class Store:
                 "INSERT INTO llm_usage VALUES(?,?,?,?) ON CONFLICT(day, model) DO UPDATE SET "
                 "requests=requests+excluded.requests, tokens=tokens+excluded.tokens",
                 (day.isoformat(), model, requests, tokens))
+
+    # ---- users (access control; status: pending | allowed | denied) ----
+    def user(self, uid: str) -> tuple[str, str] | None:
+        r = self._db.execute("SELECT name, status FROM users WHERE id=?", (uid,)).fetchone()
+        return (r[0], r[1]) if r else None
+
+    def set_user(self, uid: str, status: str, name: str | None = None) -> None:
+        old = self.user(uid)
+        with self._db:
+            self._db.execute("INSERT OR REPLACE INTO users VALUES(?,?,?,?)",
+                             (uid, name or (old[0] if old else uid), status, now_ist().isoformat()))
+
+    def users(self) -> list[tuple[str, str, str]]:
+        return self._db.execute("SELECT id, name, status FROM users ORDER BY status, at").fetchall()
 
     # ---- key/value ----
     def get(self, k: str, default: str | None = None) -> str | None:

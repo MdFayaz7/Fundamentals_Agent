@@ -76,3 +76,28 @@ async def test_no_router_or_busy(bot):
     bot.router = FakeRouter(reply=None)
     await bot.handle({"message_id": 1, "text": "best?"})
     assert "busy" in bot.tg.sent[-1]
+
+
+class RecTg(FakeTg):
+    def __init__(self):
+        super().__init__()
+        self.to = []
+
+    async def send_text(self, text, reply_to=None, chat_id=None):
+        self.to.append((chat_id or self.chat_id, text))
+        return len(self.to)
+
+
+async def test_owner_controls_access(bot):
+    bot.tg = RecTg()
+    stranger = {"id": 999, "first_name": "Ravi", "username": "ravi"}
+    assert not bot.is_allowed("999")
+    await bot.request_access(stranger)
+    assert bot.tg.to[0][0] == "123" and "/allow 999" in bot.tg.to[0][1]   # owner notified
+    assert bot.tg.to[1][0] == "999" and "private bot" in bot.tg.to[1][1]  # stranger told
+    await bot.request_access(stranger)
+    assert len(bot.tg.to) == 2                                            # asked only once
+    assert bot.command("/allow 999", cid="999") == "Only the owner can manage users."
+    assert "can now use" in bot.command("/allow 999", cid="123") and bot.is_allowed("999")
+    assert "Ravi (@ravi)" in bot.command("/users", cid="123")
+    assert "blocked" in bot.command("/deny 999", cid="123") and not bot.is_allowed("999")
