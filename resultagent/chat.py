@@ -60,6 +60,7 @@ def _line(key, facts: list[Fact], saved: str = "") -> str:
 class ChatBot:
     def __init__(self, settings: Settings, store: Store, http: Http, router: LlmRouter | None, tg: Telegram):
         self.s, self.store, self.http, self.router, self.tg = settings, store, http, router, tg
+        self.allowed = {str(tg.chat_id), *settings.telegram.allowed_ids}
 
     async def run(self) -> None:
         offset = int(self.store.get("tg_offset", "0"))
@@ -78,39 +79,43 @@ class ChatBot:
                 offset = u["update_id"] + 1
                 self.store.set("tg_offset", str(offset))
                 msg = u.get("message") or {}
-                if str((msg.get("chat") or {}).get("id")) != str(self.tg.chat_id):
-                    continue  # only the owner's chat
+                chat = msg.get("chat") or {}
+                if str(chat.get("id")) not in self.allowed:
+                    log.info("ignored message from chat %s (%s) — add it to TELEGRAM_ALLOWED_IDS to allow",
+                             chat.get("id"), chat.get("username") or chat.get("first_name") or "?")
+                    continue
                 try:
                     await self.handle(msg)
                 except Exception:
                     log.exception("handling message failed")
-                    await self.tg.send_text("⚠️ Something went wrong handling that message.")
+                    await self.tg.send_text("⚠️ Something went wrong handling that message.", chat_id=str(chat.get("id")))
 
     async def handle(self, msg: dict) -> str:
         text = (msg.get("text") or msg.get("caption") or "").strip()
         mid = msg.get("message_id")
+        cid = str((msg.get("chat") or {}).get("id", self.tg.chat_id))
+        say = lambda t: self.tg.send_text(t, mid, chat_id=cid)  # noqa: E731
         if not text:
             return "empty"
         if text.startswith("/"):
-            await self.tg.send_text(self.command(text), mid)
+            await say(self.command(text, cid))
             return "command"
         facts = parse(text)
         if facts:
             self.store.save_facts(facts)
             groups = _group([(f, "") for f in facts])
             lines = [_line(k, fs) for k, (fs, _) in groups.items()]
-            await self.tg.send_text("✅ Saved\n" + "\n".join(lines), mid)
+            await say("✅ Saved\n" + "\n".join(lines))
             return "saved"
         if msg.get("forward_origin") or msg.get("forward_date"):
             self.store.add_note(text[:2000])
-            await self.tg.send_text("📝 Saved as a note (no result numbers found in it).", mid)
+            await say("📝 Saved as a note (no result numbers found in it).")
             return "note"
-        await self.tg.typing()
-        answer = await self.answer(text)
-        await self.tg.send_text(answer, mid)
+        await self.tg.typing(cid)
+        await say(await self.answer(text, cid))
         return "answered"
 
-    def command(self, text: str) -> str:
+    def command(self, text: str, cid: str = "") -> str:
         cmd, _, arg = text.partition(" ")
         cmd = cmd.split("@")[0].lower()
         if cmd == "/today":
@@ -124,7 +129,7 @@ class ChatBot:
             groups = _group(self.store.facts(symbol=arg.strip()))
             return "\n".join(_line(k, fs, s) for k, (fs, s) in groups.items()) or f"No data saved for {arg.strip().upper()}."
         if cmd == "/forget":
-            self.store.clear_chat()
+            self.store.clear_chat(cid)
             return "🧹 Chat history cleared. Saved results are kept."
         return HELP
 
@@ -136,11 +141,11 @@ class ChatBot:
         notes = "\n".join(f"- [{at[5:16]}] {t[:400]}" for t, at in self.store.notes()) or "(none)"
         return f"Today is {today}.\n\nDATA (saved results, newest first):\n{data}\n\nNOTES (forwarded news):\n{notes}"
 
-    async def answer(self, question: str) -> str:
+    async def answer(self, question: str, cid: str = "") -> str:
         if not self.router:
             return "⚠️ No AI key configured, so I can only save numbers. Add GROQ_API_KEY to .env."
         messages = [{"role": "system", "content": SYSTEM + "\n\n" + self.context()}]
-        for role, t in self.store.chat(10):
+        for role, t in self.store.chat(10, cid):
             messages.append({"role": role, "content": t})
         messages.append({"role": "user", "content": question})
         reply = await self.router.complete(messages, purpose="chat", timeout=75, json_mode=False,
@@ -148,6 +153,6 @@ class ChatBot:
         if not reply:
             return "⚠️ All AI models are busy right now — please ask again in a minute."
         reply = reply.replace("**", "").replace("__", "").strip()  # plain-text Telegram shows these literally
-        self.store.add_chat("user", question)
-        self.store.add_chat("assistant", reply)
+        self.store.add_chat("user", question, cid)
+        self.store.add_chat("assistant", reply, cid)
         return reply

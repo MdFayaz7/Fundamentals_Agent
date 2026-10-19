@@ -17,11 +17,11 @@ class FakeTg:
     def __init__(self):
         self.sent = []
 
-    async def send_text(self, text, reply_to=None):
+    async def send_text(self, text, reply_to=None, chat_id=None):
         self.sent.append(text)
         return len(self.sent)
 
-    async def typing(self):
+    async def typing(self, chat_id=None):
         pass
 
 

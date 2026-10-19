@@ -38,6 +38,10 @@ class Store:
         self._db.execute("PRAGMA journal_mode=WAL")
         self._db.execute("PRAGMA synchronous=NORMAL")
         self._db.executescript(_SCHEMA)
+        try:  # per-account chat history (added later)
+            self._db.execute("ALTER TABLE chat ADD COLUMN cid TEXT NOT NULL DEFAULT ''")
+        except sqlite3.OperationalError:
+            pass
         self._db.commit()
 
     def close(self) -> None:
@@ -71,17 +75,19 @@ class Store:
         rows = self._db.execute("SELECT text, saved_at FROM notes ORDER BY id DESC LIMIT ?", (limit,)).fetchall()
         return rows[::-1]
 
-    def add_chat(self, role: str, text: str) -> None:
+    def add_chat(self, role: str, text: str, cid: str = "") -> None:
         with self._db:
-            self._db.execute("INSERT INTO chat(role, text, at) VALUES(?,?,?)", (role, text, now_ist().isoformat()))
+            self._db.execute("INSERT INTO chat(role, text, at, cid) VALUES(?,?,?,?)",
+                             (role, text, now_ist().isoformat(), cid))
 
-    def chat(self, limit: int = 10) -> list[tuple[str, str]]:
-        rows = self._db.execute("SELECT role, text FROM chat ORDER BY id DESC LIMIT ?", (limit,)).fetchall()
+    def chat(self, limit: int = 10, cid: str = "") -> list[tuple[str, str]]:
+        rows = self._db.execute("SELECT role, text FROM chat WHERE cid=? ORDER BY id DESC LIMIT ?",
+                                (cid, limit)).fetchall()
         return rows[::-1]
 
-    def clear_chat(self) -> None:
+    def clear_chat(self, cid: str = "") -> None:
         with self._db:
-            self._db.execute("DELETE FROM chat")
+            self._db.execute("DELETE FROM chat WHERE cid=?", (cid,))
 
     # ---- LLM usage (router quotas) ----
     def llm_usage(self, day: date, model: str) -> tuple[int, int]:

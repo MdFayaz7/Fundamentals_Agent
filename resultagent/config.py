@@ -23,6 +23,7 @@ PROVIDER_ENV_KEYS = {
 class TelegramCfg:
     bot_token: str
     chat_id: str
+    allowed_ids: tuple[str, ...] = ()  # extra accounts allowed to chat (TELEGRAM_ALLOWED_IDS)
 
 
 @dataclass(slots=True)
@@ -129,7 +130,8 @@ def load_settings(config_path: Path, env_path: Path | None) -> Settings:
 
     paths_raw = raw.get("paths", {})
     return Settings(
-        telegram=TelegramCfg(env["TELEGRAM_BOT_TOKEN"], env["TELEGRAM_CHAT_ID"]),
+        telegram=TelegramCfg(env["TELEGRAM_BOT_TOKEN"], env["TELEGRAM_CHAT_ID"],
+                             tuple(x.strip() for x in env.get("TELEGRAM_ALLOWED_IDS", "").split(",") if x.strip())),
         poll=PollCfg(**raw.get("poll", {})),
         filter=FilterCfg(**raw.get("filter", {})),
         llm=LlmCfg(models=models, commentary_reserve=float(llm_raw.get("commentary_reserve", 0.3))),
@@ -144,6 +146,7 @@ def load_settings(config_path: Path, env_path: Path | None) -> Settings:
 _SECRET_KEYS = {
     "TELEGRAM_BOT_TOKEN",
     "TELEGRAM_CHAT_ID",
+    "TELEGRAM_ALLOWED_IDS",
     "GROQ_API_KEY",
     "OPENROUTER_API_KEY",
     "GEMINI_API_KEY",
