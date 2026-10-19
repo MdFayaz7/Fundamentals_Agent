@@ -101,3 +101,11 @@ async def test_owner_controls_access(bot):
     assert "can now use" in bot.command("/allow 999", cid="123") and bot.is_allowed("999")
     assert "Ravi (@ravi)" in bot.command("/users", cid="123")
     assert "blocked" in bot.command("/deny 999", cid="123") and not bot.is_allowed("999")
+
+
+async def test_followup_reuses_previous_stocks(bot):
+    bot.yahoo = None  # no network in tests
+    await bot.handle({"message_id": 1, "text": HFCL})
+    assert await bot._resolve("is HFCL good?", ["HFCL"], "c1") == ["HFCL.NS"]
+    assert await bot._resolve("what about its debt?", ["HFCL"], "c1") == ["HFCL.NS"]
+    assert await bot._resolve("best result today?", [], "c1") == []

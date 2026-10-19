@@ -4,7 +4,10 @@ Every number is computed here; the AI only interprets it. One session + crumb, c
 from __future__ import annotations
 
 import asyncio
+import html
 import logging
+import re
+from email.utils import parsedate_to_datetime
 import time
 from datetime import datetime, timezone
 from urllib.parse import quote as urlquote
@@ -80,6 +83,47 @@ class Yahoo:
         nse = next((x["symbol"] for x in eq if x["symbol"] == f"{base}.NS"), None)
         return nse or eq[0]["symbol"]
 
+    async def peers(self, industry: str | None, exchange: str | None) -> dict | None:
+        """P/E of the 25 largest listed companies in the same industry on the same exchange."""
+        if not industry or not exchange:
+            return None
+        key = f"peers:{industry}:{exchange}"
+        hit = self._cache.get(key)
+        if hit and time.monotonic() - hit[0] < 3600:
+            return hit[1]
+        s, crumb = await self._session()
+        body = {"size": 25, "offset": 0, "sortField": "intradaymarketcap", "sortType": "DESC", "quoteType": "EQUITY",
+                "query": {"operator": "and", "operands": [{"operator": "eq", "operands": ["industry", industry]},
+                                                          {"operator": "eq", "operands": ["exchange", exchange]}]}}
+        r = await s.post(f"{_Q2}/v1/finance/screener?crumb={crumb}", json=body, timeout=15)
+        quotes = ((r.json().get("finance") or {}).get("result") or [{}])[0].get("quotes", []) if r.status_code == 200 else []
+        pes = sorted(q["trailingPE"] for q in quotes if q.get("trailingPE") and 0 < q["trailingPE"] < 500)
+        if len(pes) < 3:
+            return None
+        res = {"industry": industry, "count": len(pes), "median_pe": pes[len(pes) // 2],
+               "names": [q.get("symbol", "").replace(".NS", "") for q in quotes[:5]]}
+        self._cache[key] = (time.monotonic(), res)
+        return res
+
+    async def news(self, name: str, india: bool) -> list[tuple[str, str]]:
+        """Up to 4 newest headlines from the last 7 days (Google News RSS) as (date, title)."""
+        gl = "IN" if india else "US"
+        q = urlquote(f"{name} share" if india else f"{name} stock")
+        s, _ = await self._session()
+        r = await s.get(f"https://news.google.com/rss/search?q={q}+when:7d&hl=en-{gl}&gl={gl}&ceid={gl}:en", timeout=15)
+        items = re.findall(r"<item>.*?<title>(.*?)</title>.*?<pubDate>(.*?)</pubDate>", r.text, re.S)
+        dated = []
+        for title, pub in items:
+            try:
+                d = parsedate_to_datetime(pub)
+            except (TypeError, ValueError):
+                continue
+            dated.append((d, html.unescape(title)))
+        dated.sort(reverse=True)
+        key = re.sub(r"[^a-z0-9 ]", " ", name.lower()).split()[:1]  # e.g. "kross", "apple"
+        dated = [(d, t) for d, t in dated if not key or key[0] in t.lower()]
+        return [(d.strftime("%d-%b"), t[:140]) for d, t in dated[:4]]
+
     async def stock(self, ticker: str) -> dict | None:
         """All metrics for one Yahoo ticker (RELIANCE.NS, AAPL...), or None when Yahoo doesn't know it."""
         ticker = ticker.upper()
@@ -119,6 +163,7 @@ class Yahoo:
             ap, pr = res.get("assetProfile", {}), res.get("price", {})
             out.update(
                 name=pr.get("longName") or pr.get("shortName"), sector=ap.get("sector"), industry=ap.get("industry"),
+                exchange=pr.get("exchange"),
                 mcap=(_raw(sd, "marketCap") or 0) / div or None, summary=(ap.get("longBusinessSummary") or "")[:300],
                 pe=_raw(sd, "trailingPE"), fwd_pe=_raw(ks, "forwardPE") or _raw(sd, "forwardPE"),
                 ev_ebitda=_raw(ks, "enterpriseToEbitda") if fin == cur else None,  # mixed currencies -> unreliable
@@ -153,8 +198,15 @@ class Yahoo:
                        as_of=datetime.fromtimestamp(r["meta"].get("regularMarketTime", 0), timezone.utc).strftime("%d-%b"))
         except (TypeError, KeyError, IndexError, ZeroDivisionError):
             pass
-        if len(out) <= 2 and not out.get("quarters"):
+        if len(out) <= 3 and not out.get("quarters"):
             return None
+        peers, news = await asyncio.gather(self.peers(out.get("industry"), out.get("exchange")),
+                                           self.news(out.get("name") or symbol, cur == "INR"),
+                                           return_exceptions=True)
+        if isinstance(peers, dict):
+            out["peers"] = peers
+        if isinstance(news, list):
+            out["news"] = news
         self._cache[ticker] = (time.monotonic(), out)
         return out
 
@@ -198,7 +250,9 @@ def describe(s: dict) -> str:
             if s.get(k):
                 t.append(f"{(s['price'] / s[k] - 1) * 100:+.0f}% vs {name}")
         if s.get("rsi") is not None:
-            t.append(f"RSI {s['rsi']:.0f}")
+            r = s["rsi"]
+            zone = "overbought" if r > 70 else "oversold" if r < 30 else "strong" if r >= 60 else "weak" if r <= 40 else "neutral"
+            t.append(f"RSI {r:.0f} ({zone})")
         if s.get("vol_x"):
             t.append(f"volume {s['vol_x']:.1f}x 20d avg")
         if s.get("high_52w"):
@@ -230,7 +284,15 @@ def describe(s: dict) -> str:
                 "op margin " + " → ".join("n/a" if m is None else f"{m:.0f}%" for m in margins) if any(margins) else None]
         fc = s.get("fin_currency", s.get("currency", "INR"))
         unit = "₹ Cr" if fc == "INR" else f"{fc} M"
-        L.append(f"  Last {len(qs)} quarters ({qs[0][0][:7]}…{qs[-1][0][:7]}, {unit}): " + " | ".join(r for r in rows if r))
+        L.append(f"  Last {len(qs)} quarters by quarter-end date ({', '.join(d[:7] for d, _ in qs)}; {unit}; the "
+                 f"newest result the user saved may be a later quarter): " + " | ".join(r for r in rows if r))
+    p = s.get("peers")
+    if p and s.get("pe"):
+        diff = (s["pe"] / p["median_pe"] - 1) * 100
+        L.append(f"  Peers ({p['industry']}, {p['count']} largest on same exchange incl. {', '.join(p['names'][:4])}): "
+                 f"median P/E {p['median_pe']:.1f} → this stock {s['pe']:.1f} = {diff:+.0f}% vs peers")
+    if s.get("news"):
+        L.append("  Recent headlines (unverified, context only): " + " || ".join(f"[{d}] {t}" for d, t in s["news"]))
     sig = signals(s)
     if sig:
         L.append("  Signals: " + "; ".join(sig))

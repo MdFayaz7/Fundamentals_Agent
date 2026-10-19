@@ -28,8 +28,9 @@ def test_signals_from_numbers():
 
 def test_describe_inr_and_usd_reporting():
     d = describe(base())
-    assert "mcap ₹1,919 Cr (small cap)" in d and "debt ₹119 Cr" in d and "(₹ Cr)" not in d and "₹ Cr)" in d
+    assert "mcap ₹1,919 Cr (small cap)" in d and "debt ₹119 Cr" in d and "₹ Cr; the newest result" in d
     us = describe(base(symbol="INFY", currency="INR", fin_currency="USD", debt=923, cash=3100))
     assert "debt $923M" in us and "cash $3.1B" in us and "USD M" in us
+    assert "RSI 75 (overbought)" in d and "RSI 38 (weak)" in describe(base(rsi=38))
     aapl = describe(base(symbol="AAPL", currency="USD", fin_currency="USD", mcap=5_000_000, price=343.32))
     assert "price $343.32" in aapl and "mega cap" in aapl

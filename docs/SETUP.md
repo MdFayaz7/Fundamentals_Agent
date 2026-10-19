@@ -1,6 +1,8 @@
 # Setup on Raspberry Pi 5
 
-A Telegram chat analyst: forward result headlines to the bot, then ask questions about them.
+A private Telegram stock analyst (India + US): forward result headlines, ask about any company.
+Free data: Yahoo Finance (fundamentals, 5-quarter trend, peers, technicals), BSE (fallback), Google News
+headlines. All numbers are computed in code; the AI only interprets them.
 
 ## 1. Prepare the Pi
 Install **Raspberry Pi OS Lite (64-bit)** with Raspberry Pi Imager (enable SSH and Wi-Fi there).
