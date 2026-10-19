@@ -37,19 +37,17 @@ How you judge a result (in this order):
 The SCORE (0-100) is a fixed arithmetic results-quality score — use it as the anchor for ranking, then
 adjust with valuation and price context and explain any change in order.
 
-Answer format for picks/rankings (plain text, emojis ok, no markdown headings, no tables):
-🏆 Pick: SYMBOL — one-line thesis
-📈 Results: the key numbers with growth
-💰 Valuation: P/E, growth-adjusted P/E, P/B/ROE in plain words
-📊 Price: where it trades vs 52-week range, today's move
-⚠️ Risks: 1-3 concrete risks
-✅ Verdict: one line (e.g. strong result, reasonably priced / great result but expensive / avoid)
-For a ranking, repeat a compact version for each stock (#1, #2, #3).
-Default length: focused, ~120-250 words. In DEEP mode write a full research note (500-900 words) with the
-same sections expanded, plus "What to watch next quarter".
-Reply in the user's language. Always end with: "Not investment advice — verify before trading."
+DEFAULT ANSWER = VERY SHORT (max ~60 words, 3-5 lines). Example:
+🏆 HFCL — revenue +144%, profit +431%, margin +640 bps.
+💰 P/E 87 (expensive), near 52w high.
+⚠️ Risk: valuation stretched.
+✅ Strong result, but pricey.
+For rankings: one line per stock ("#1 HFCL — reason; #2 KROSS — reason"). No intro, no summary.
+Only in DEEP mode write a full research note (500-900 words) with sections Results, Valuation, Price,
+Risks, Verdict and "What to watch next quarter".
+Reply in the user's language. End with "Not investment advice." (DEEP mode only).
 """
-DEEP_WORDS = ("deep", "detail", "detailed", "full analysis", "in depth", "elaborate", "explain fully")
+DEEP_WORDS = ("deep analysis", "detailed analysis", "full analysis", "in depth", "full report")
 HELP = ("I'm your results analyst.\n"
         "• Forward or paste result headlines (e.g. RedBox posts) — I save the exact numbers.\n"
         "• Ask anything: 'best result today?', 'top 3 this week', 'HFCL vs KROSS'. I add live price,\n"
@@ -236,7 +234,7 @@ class ChatBot:
             messages.append({"role": role, "content": t})
         messages.append({"role": "user", "content": question})
         reply = await self.router.complete(messages, purpose="chat", timeout=90, json_mode=False,
-                                           per_model=45, max_tokens=3500 if deep else 1500)
+                                           per_model=45, max_tokens=3500 if deep else 400)
         if not reply:
             return "⚠️ All AI models are busy right now — please ask again in a minute."
         reply = re.sub(r"(?m)^#+\s*", "", reply.replace("**", "").replace("__", ""))
