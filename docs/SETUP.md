@@ -42,7 +42,10 @@ In Telegram, send `/help` to your bot. Forward result posts, then ask questions.
 journalctl -u resultagent -f        # live log
 ```
 
-## Update
+## Update (automatic)
+The Pi checks GitHub every 5 minutes (`deploy/autodeploy.sh` via cron) and restarts the bot on new
+commits — just `git push` to `main` from anywhere. Log: `~/resultagent/data/autodeploy.log`.
+Enable once on the Pi:
 ```bash
-cd ~/resultagent && git pull && .venv/bin/pip install -q . && sudo systemctl restart resultagent
+(crontab -l 2>/dev/null; echo "*/5 * * * * $HOME/resultagent/deploy/autodeploy.sh") | crontab -
 ```
