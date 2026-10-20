@@ -109,3 +109,25 @@ async def test_followup_reuses_previous_stocks(bot):
     assert await bot._resolve("is HFCL good?", ["HFCL"], "c1") == ["HFCL.NS"]
     assert await bot._resolve("what about its debt?", ["HFCL"], "c1") == ["HFCL.NS"]
     assert await bot._resolve("best result today?", [], "c1") == []
+
+
+A = "AAA: Q2 NET PROFIT 900M RUPEES VS 100M (YOY)\nAAA: Q2 REVENUE 9B RUPEES VS 3B (YOY)"
+B = "BBB: Q2 NET PROFIT 120M RUPEES VS 100M (YOY)\nBBB: Q2 REVENUE 1.1B RUPEES VS 1B (YOY)"
+C = "CCC: Q2 NET PROFIT 150M RUPEES VS 100M (YOY)\nCCC: Q2 REVENUE 1.3B RUPEES VS 1B (YOY)"
+D = "DDD: Q2 NET PROFIT 140M RUPEES VS 100M (YOY)\nDDD: Q2 REVENUE 1.2B RUPEES VS 1B (YOY)"
+
+
+async def test_above_three_means_the_batch_just_forwarded(bot):
+    bot.yahoo = bot.market = None
+    await bot.handle({"message_id": 1, "text": A})                  # older, best-scoring result
+    await bot.handle({"message_id": 2, "text": "what is best today?"})
+    for i, txt in enumerate((B, C, D)):                              # new batch of three
+        await bot.handle({"message_id": 10 + i, "text": txt})
+    await bot.handle({"message_id": 20, "text": "give me the best stock from above three"})
+    system = bot.router.messages[0]["content"]
+    assert "FOCUS" in system and "BBB" in system and "CCC" in system and "DDD" in system
+    results = system.split("RESULTS")[1].split("MARKET DATA")[0]
+    assert "AAA" not in results                                      # old result excluded
+    await bot.handle({"message_id": 21, "text": "compare the last 2"})
+    focus = next(ln for ln in bot.router.messages[0]["content"].splitlines() if ln.startswith("FOCUS"))
+    assert "DDD" in focus and "CCC" in focus and "BBB" not in focus

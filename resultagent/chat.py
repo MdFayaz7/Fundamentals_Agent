@@ -150,6 +150,7 @@ class ChatBot:
         facts = parse(text)
         if facts:
             self.store.save_facts(facts)
+            self._remember_forward(cid, list(dict.fromkeys(f.symbol for f in facts)))
             groups = _group([(f, "") for f in facts])
             lines = [_line(k, fs) for k, (fs, _) in groups.items()]
             await say("✅ Saved\n" + "\n".join(lines))
@@ -160,6 +161,7 @@ class ChatBot:
             return "note"
         await self.tg.typing(cid)
         await say(await self.answer(text, cid))
+        self.store.set(f"batch_open:{cid}", "0")  # the next forwarded post starts a new batch
         return "answered"
 
     # ---- access control: the owner (TELEGRAM_CHAT_ID) decides who may chat ----
@@ -214,13 +216,42 @@ class ChatBot:
             return "🧹 Chat history cleared. Saved results are kept."
         return HELP
 
+    # ---- "the above three", "these", "last 5": the stocks the user just forwarded ----
+    def _remember_forward(self, cid: str, syms: list[str]) -> None:
+        batch = self.store.get(f"batch:{cid}", "") if self.store.get(f"batch_open:{cid}") == "1" else ""
+        batch_l = [s for s in batch.split(",") if s]
+        self.store.set(f"batch:{cid}", ",".join(batch_l + [s for s in syms if s not in batch_l]))
+        self.store.set(f"batch_open:{cid}", "1")
+        recent = [s for s in self.store.get(f"recent:{cid}", "").split(",") if s and s not in syms]
+        self.store.set(f"recent:{cid}", ",".join((list(reversed(syms)) + recent)[:30]))
+
+    def _focus(self, question: str, cid: str) -> list[str] | None:
+        q = question.lower()
+        if not re.search(r"\b(above|these|those|this batch|last \w+|just (sent|forwarded|shared|posted)|"
+                         r"i (sent|forwarded|shared|posted)|forwarded|shared)\b", q):
+            return None
+        n = None
+        m = re.search(r"\b(\d{1,2}|one|two|three|four|five|six|seven|eight|nine|ten)\b", q)
+        if m:
+            words = "one two three four five six seven eight nine ten".split()
+            n = int(m.group(1)) if m.group(1).isdigit() else words.index(m.group(1)) + 1
+        recent = [s for s in self.store.get(f"recent:{cid}", "").split(",") if s]
+        batch = [s for s in self.store.get(f"batch:{cid}", "").split(",") if s]
+        if n and len(batch) != n:
+            return recent[:n] or None
+        return batch or recent[: n or 3] or None
+
     async def context(self, question: str, cid: str = "") -> str:
         rows = self.store.facts(since=now_ist() - timedelta(days=45))
         groups = _group(rows)
         scored = sorted(((score(fs)[0], k, fs, saved) for k, (fs, saved) in groups.items()),
                         key=lambda x: (x[0], x[3]), reverse=True)[:150]
+        focus = self._focus(question, cid)
+        if focus:  # only the stocks the user is pointing at
+            scored = [x for x in scored if x[1][0] in focus]
+            self.store.set(f"last_tickers:{cid}", ",".join(f"{s}.NS" for s in focus))
         saved_syms = [k[0] for _, k, _, _ in scored]
-        tickers = await self._resolve(question, saved_syms, cid)
+        tickers = [f"{s}.NS" for s in focus] if focus else await self._resolve(question, saved_syms, cid)
         if not tickers:  # generic question ("best today?"): the top-scored saved results
             tickers = [f"{s}.NS" for s in saved_syms[:4]]
         tickers = tickers[:4]  # keeps the prompt within free-tier per-minute token limits
@@ -244,7 +275,9 @@ class ChatBot:
             lines.append(line)
         market = "\n".join(evidence.values()) or "(none fetched)"
         notes = "\n".join(f"- [{at[5:16]}] {t[:400]}" for t, at in self.store.notes()) or "(none)"
-        return (f"Today is {now_ist():%Y-%m-%d %H:%M} IST.\n\n"
+        head = (f"FOCUS: the user is asking ONLY about these stocks they just forwarded: {', '.join(focus)}. "
+                f"Pick/rank/compare only among them.\n\n" if focus else "")
+        return (f"{head}Today is {now_ist():%Y-%m-%d %H:%M} IST.\n\n"
                 f"RESULTS (saved, best score first):\n{chr(10).join(lines) or '(no results saved yet)'}\n\n"
                 f"MARKET DATA (Yahoo Finance/BSE; P/E trailing 12m; quarterly trend may lag the newest result — "
                 f"check its dates):\n{market}\n\n"
